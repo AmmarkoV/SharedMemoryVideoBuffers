@@ -1,26 +1,35 @@
 import ctypes
 
+# Load C library
+def loadLibrary(filename, relativePath="", forceUpdate=False):
+    if (relativePath != ""):
+        filename = relativePath + "/" + filename
+
+    if (forceUpdate) or (not exists(filename)):
+        print(bcolors.FAIL,"Could not find DataLoader Library (", filename, "), compiling a fresh one..!",bcolors.ENDC)
+        print("Current directory was (", os.getcwd(), ") ")
+        directory = os.path.dirname(os.path.abspath(filename))
+        #creationScript = directory + "/makeLibrary.sh"
+        os.system("make")
+
+    if not exists(filename):
+        directory = os.path.dirname(os.path.abspath(filename))
+        print(bcolors.FAIL,"Could not make DataLoader Library, terminating",bcolors.ENDC)
+        print("Directory we tried was : ", directory)
+        sys.exit(0)
+
+    libDataLoader = CDLL(filename, mode=ctypes.RTLD_GLOBAL)
+    libDataLoader.connect()
+
+    return libDataLoader
+
+
 
 class SharedMemoryManager:
-    def __init__(self, size):
+    def __init__(self, libraryPath):
         # Create a shared memory segment
-        self.shm = ctypes.CDLL(None).shm_open
-        self.shm.restype = ctypes.c_void_p
-        self.shm.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
-        self.shm_name = "video_frames.shm"
-        self.shm_fd = self.shm(self.shm_name.encode(), ctypes.c_int(2), ctypes.c_int(0o777))
-
-        # Set the size of the shared memory segment
-        self.size = size
-        self.ftruncate = ctypes.CDLL(None).ftruncate
-        self.ftruncate.argtypes = [ctypes.c_int, ctypes.c_size_t]
-        self.ftruncate(self.shm_fd, self.size)
-
-        # Map the shared memory segment to a ctypes pointer
-        self.mmap = ctypes.CDLL(None).mmap
-        self.mmap.restype = ctypes.POINTER(ctypes.c_ubyte)
-        self.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]
-        self.shared_memory = self.mmap(0, self.size, 3, 1, self.shm_fd, 0)
+        
+        self.libSharedMemoryVideoBuffers = loadLibrary(libraryPath, forceUpdate=forceLibUpdate)
 
     def copy_numpy_to_shared_memory(self, array):
         # Check if the array size matches the shared memory size
