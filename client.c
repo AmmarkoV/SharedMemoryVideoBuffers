@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include <unistd.h>
 
 
@@ -64,6 +65,8 @@ int main()
         return EXIT_FAILURE;
     }
 
+
+    srand((unsigned int)time(NULL)); // Seed the random number generator
     fprintf(stderr,"Write dummy data\n");
     // Example to write to buffer (Client)
     if (startWritingToVideoBufferPointer(frame) == 0)
@@ -71,7 +74,7 @@ int main()
         unsigned char *data = (unsigned char*)malloc(frame->frame_size);
         for (size_t i = 0; i < frame->frame_size; i++)
         {
-            data[i] = i % 256;
+            data[i] = rand() % 255;
         }
         memcpy(frame->data, data, frame->frame_size);
         stopWritingToVideoBufferPointer(frame);
