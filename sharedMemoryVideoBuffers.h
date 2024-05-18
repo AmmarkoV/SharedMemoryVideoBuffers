@@ -20,15 +20,24 @@ extern "C"
 
 #include <stddef.h>
 
+
 // Define a structure to hold video frame metadata
 typedef struct
 {
+    char name[256];
     size_t width;
     size_t height;
     size_t channels;
     size_t frame_size;
     unsigned char *data;
 } VideoFrame;
+
+// Define a structure to manage video buffers in shared memory
+typedef struct
+{
+    size_t count;
+    VideoFrame frames[];
+} VideoBufferList;
 
 // Functions to manage shared memory
 int create_shared_memory(const char *shm_name, size_t total_size);
@@ -38,10 +47,12 @@ void unmap_shared_memory(void *addr, size_t total_size);
 void close_shared_memory(int shm_fd);
 
 // Functions to manage video frames
-VideoFrame* init_video_frame(void *shared_mem, size_t width, size_t height, size_t channels);
-VideoFrame* get_video_frame(void *shared_mem, size_t frame_index);
+int add_new_video_buffer(void *shared_mem, const char *stream_name, size_t width, size_t height, size_t channels);
+VideoFrame* get_video_buffer_ptr(void *shared_mem, const char *stream_name);
+int get_video_buffer(void *shared_mem, const char *stream_name, VideoFrame *frame);
 void write_video_frame(VideoFrame *frame, unsigned char *data);
 void read_video_frame(VideoFrame *frame, unsigned char *buffer);
+
 
 
 #ifdef __cplusplus
