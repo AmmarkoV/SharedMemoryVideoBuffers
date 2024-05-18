@@ -42,6 +42,10 @@ struct SharedMemoryContext
 
 };
 
+
+int WriteVideoFrame(const char * filename,struct VideoFrame * pic);
+
+
 // Function declarations
 
 // Server process functions
