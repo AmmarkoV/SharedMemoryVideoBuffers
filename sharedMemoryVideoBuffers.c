@@ -68,6 +68,20 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic)
     return 0;
 }
 
+// Function to copy data from a buffer to the shared memory buffer
+void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
+{
+  if(frame!=0)
+    {
+        if (frame->data!=0)
+        {
+           if (frame->frame_size >= n)
+           {
+            memcpy(frame->data,src, n);
+           }
+        }
+    }
+}
 
 // Create and open shared memory context descriptor
 int createSharedMemoryContextDescriptor(const char *path)

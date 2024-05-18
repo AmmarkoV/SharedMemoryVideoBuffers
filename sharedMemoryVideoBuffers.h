@@ -52,6 +52,8 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
 
 int create_frame_shared_memory(struct VideoFrame *frame);
 
+
+void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n);
 int map_frame_shared_memory(struct VideoFrame *frame);
 
 // Buffer management functions
