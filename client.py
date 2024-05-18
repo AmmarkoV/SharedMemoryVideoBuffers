@@ -32,7 +32,9 @@ def main():
         
         # Display the frame in a window
         cv2.imshow('Webcam', frame)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
+
         smm.copy_numpy_to_shared_memory(frame)
 
         # Break the loop if 'q' is pressed

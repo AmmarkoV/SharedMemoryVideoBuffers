@@ -65,7 +65,10 @@ int main()
         {
             data[i] = rand() % 255;
         }
-        memcpy(frame->data, data, frame->frame_size);
+
+        copy_to_shared_memory((void *)frame, data,frame->frame_size);
+
+        //memcpy(frame->data, data, frame->frame_size);
         stopWritingToVideoBufferPointer(frame);
         free(data);
     }
