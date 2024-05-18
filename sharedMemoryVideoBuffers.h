@@ -21,7 +21,8 @@ extern "C"
 #include <stddef.h>
 
 // Define a structure to hold video frame metadata
-typedef struct {
+typedef struct
+{
     size_t width;
     size_t height;
     size_t channels;
