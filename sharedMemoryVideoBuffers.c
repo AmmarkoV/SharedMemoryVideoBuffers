@@ -69,15 +69,16 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic)
 }
 
 // Function to copy data from a buffer to the shared memory buffer
-void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
+void copy_to_shared_memory(void *frameV, const void* src, size_t n)
 {
+  struct VideoFrame *frame = (struct VideoFrame *) frameV;
   if(frame!=0)
     {
         if (frame->data!=0)
         {
            if (frame->frame_size >= n)
            {
-            memcpy(frame->data,src, n);
+             memcpy(frame->data,src, n);
            }
         }
     }
@@ -120,6 +121,46 @@ int createSharedMemoryContextDescriptor(const char *path)
     close(shm_fd);
     return 0;
 }
+
+
+
+int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels)
+{
+    if (context!=0)
+    {
+      int contextID = -1;
+      for (int i=0; i<context->numberOfBuffers; i++)
+      {
+         if (strcmp(streamName,context->buffer[i].name)==0)
+         {
+           fprintf(stderr,"Stream already existing \n");
+           contextID = i;
+         }
+      }
+
+      if (contextID==-1)
+      {
+         contextID = context->numberOfBuffers++;
+      }
+    // Example to add a new buffer (Server)
+    struct VideoFrame *newBuffer = &context->buffer[contextID];
+    snprintf(newBuffer->name,MAX_SHM_NAME,"stream1");
+    newBuffer->width      = width;
+    newBuffer->height     = height;
+    newBuffer->channels   = channels;
+    newBuffer->frame_size = newBuffer->width * newBuffer->height * newBuffer->channels;
+
+    if (create_frame_shared_memory(newBuffer) == -1)
+    {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+
+    }
+   return EXIT_FAILURE;
+}
+
+
 
 // Connect to existing shared memory context descriptor
 struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path)
@@ -204,8 +245,9 @@ int map_frame_shared_memory(struct VideoFrame *frame)
 }
 
 // Get a pointer to a video buffer by feed name
-struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext *smvc, const char *feedName)
+struct VideoFrame* getVideoBufferPointer(void *smvcV, const char *feedName)
 {
+    struct SharedMemoryContext * smvc = (struct SharedMemoryContext *) smvcV;
     for (unsigned int i = 0; i < smvc->numberOfBuffers; i++)
     {
         if (strncmp(smvc->buffer[i].name, feedName, sizeof(smvc->buffer[i].name)) == 0)

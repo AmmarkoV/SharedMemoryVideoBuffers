@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from SharedMemoryManager import SharedMemoryManager
 
 def main():
     # Open the first webcam connected to the computer
@@ -10,6 +11,15 @@ def main():
         print("Error: Couldn't open webcam")
         return
     
+
+    ret, frame = cap.read()
+    smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
+                              descriptor = "video_frames.shm", 
+                              frameName  = "stream1", 
+                              width      = frame.shape[1],
+                              height     = frame.shape[0],
+                              channels   = frame.shape[2])
+
     # Loop to continuously read frames from the webcam
     while True:
         # Capture frame-by-frame
@@ -23,6 +33,8 @@ def main():
         # Display the frame in a window
         cv2.imshow('Webcam', frame)
         
+        smm.copy_numpy_to_shared_memory(frame)
+
         # Break the loop if 'q' is pressed
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break

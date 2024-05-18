@@ -52,12 +52,12 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
 
 int create_frame_shared_memory(struct VideoFrame *frame);
 
-
-void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n);
+int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels);
+void copy_to_shared_memory(void *frameV, const void* src, size_t n);
 int map_frame_shared_memory(struct VideoFrame *frame);
 
 // Buffer management functions
-struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext *smvc, const char *feedName);
+struct VideoFrame* getVideoBufferPointer(void *smvcV, const char *feedName);
 int startWritingToVideoBufferPointer(struct VideoFrame *vf);
 int stopWritingToVideoBufferPointer(struct VideoFrame *vf);
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf);

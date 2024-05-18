@@ -34,18 +34,7 @@ int main()
         return EXIT_FAILURE;
     }
 
-    // Example to add a new buffer (Server)
-    struct VideoFrame *newBuffer = &context->buffer[context->numberOfBuffers++];
-    snprintf(newBuffer->name,MAX_SHM_NAME,"stream1");
-    newBuffer->width      = 640;
-    newBuffer->height     = 480;
-    newBuffer->channels   = 3;
-    newBuffer->frame_size = newBuffer->width * newBuffer->height * newBuffer->channels;
-
-    if (create_frame_shared_memory(newBuffer) == -1)
-    {
-        return EXIT_FAILURE;
-    }
+    createVideoFrameMetaData(context,"stream1",640,480,3);
 
     // Client process
     struct SharedMemoryContext *clientContext = connectToSharedMemoryContextDescriptor(SHM_NAME);

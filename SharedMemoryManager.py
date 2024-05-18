@@ -1,7 +1,9 @@
 import ctypes
 
+from ctypes import *
 # Load C library
 def loadLibrary(filename, relativePath="", forceUpdate=False):
+    from os.path import exists
     if (relativePath != ""):
         filename = relativePath + "/" + filename
 
@@ -25,32 +27,43 @@ def loadLibrary(filename, relativePath="", forceUpdate=False):
 
 
 class SharedMemoryManager:
-    def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", width=640, height=480, channels=3):
+    def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", width=640, height=480, channels=3, forceLibUpdate=False):
         # Create a shared memory segment
         
+        print("Loading libSharedMemoryVideoBuffers")
         self.libSharedMemoryVideoBuffers = loadLibrary(libraryPath, forceUpdate=forceLibUpdate)
 
         #Connect to descriptor
+        print("Connecting to descriptor ",descriptor)
         self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor.argtypes = [ctypes.c_char_p]
         self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor.restype  = ctypes.c_void_p
         path = descriptor.encode('utf-8')  
         self.smc = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
 
+
+        self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.argtypes = [ctypes.c_void_p,ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_uint]
+        self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.restype  = ctypes.c_int
+        path = frameName.encode('utf-8')  
+        res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,width,height,channels)
+
         #Get Video Buffer Pointer
-        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_char_p]
+        print("Getting frame ",frameName)
+        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
         self.libSharedMemoryVideoBuffers.getVideoBufferPointer.restype  = ctypes.c_void_p
         path = frameName.encode('utf-8')  
         self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
 
         #Map Video Buffer Pointer
-        self.libSharedMemoryVideoBuffers.map_frame_shared_memory.argtypes = [ctypes.c_char_p]
+        print("Mapping video buffer memory ")
+        self.libSharedMemoryVideoBuffers.map_frame_shared_memory.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = ctypes.c_int
         res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame)
 
 
     def copy_numpy_to_shared_memory(self, array):
+        print("copy_numpy_to_shared_memory ")
         #Lock Video Buffer
-        self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.argtypes = [ctypes.c_char_p]
+        self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.restype  = ctypes.c_int
         res = self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer(self.frame)
 
@@ -60,13 +73,14 @@ class SharedMemoryManager:
 
         # Copy the array data to shared memory
         array_ptr = array.ctypes.data_as(ctypes.c_void_p)
-        dest_ptr = ctypes.c_void_p(self.frame)
-        size = array.nbytes
+        size      = array.nbytes
+        print("copy_to_shared_memory ")
         self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size)
 
 
+        print("stopWritingToVideoBufferPointer ")
         # Copy the array data to shared memory
-        self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.argtypes = [ctypes.c_char_p]
+        self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.restype  = ctypes.c_int
         res = self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer(self.frame)
 
@@ -76,3 +90,4 @@ class SharedMemoryManager:
 # Test
 if __name__ == "__main__":
     # Your testing code here
+    pass
