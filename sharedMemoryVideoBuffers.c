@@ -7,107 +7,111 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-
-// Create and open shared memory segment
-int create_shared_memory(const char *shm_name, size_t total_size) {
-    int shm_fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
-    if (shm_fd == -1) {
+// Create and open shared memory context descriptor
+int createSharedMemoryContextDescriptor(const char *path)
+{
+    int shm_fd = shm_open(path, O_CREAT | O_RDWR, 0666);
+    if (shm_fd == -1)
+    {
         perror("shm_open");
         return -1;
     }
 
-    if (ftruncate(shm_fd, total_size) == -1) {
+    size_t total_size = sizeof(struct SharedMemoryContext);
+    if (ftruncate(shm_fd, total_size) == -1)
+    {
         perror("ftruncate");
         close(shm_fd);
         return -1;
     }
 
-    return shm_fd;
-}
-
-// Open existing shared memory segment
-int open_shared_memory(const char *shm_name, size_t total_size) {
-    int shm_fd = shm_open(shm_name, O_RDWR, 0666);
-    if (shm_fd == -1) {
-        perror("shm_open");
+    struct SharedMemoryContext *context = (struct SharedMemoryContext*) mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (context == MAP_FAILED)
+    {
+        perror("mmap");
+        close(shm_fd);
         return -1;
     }
 
-    return shm_fd;
+    // Initialize the shared memory context
+    context->numberOfBuffers = 0;
+    for (unsigned int i = 0; i < MAX_NUMBER_OF_BUFFERS; i++)
+    {
+        context->buffer[i].locked = 0;
+        context->buffer[i].data = (unsigned char*)(context + 1) + i * (640 * 480 * 3); // Adjust size as needed
+    }
+
+    munmap(context, total_size);
+    close(shm_fd);
+    return 0;
 }
 
-// Map shared memory segment to address space
-void* map_shared_memory(int shm_fd, size_t total_size) {
-    void *addr = mmap(0, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (addr == MAP_FAILED) {
-        perror("mmap");
+// Connect to existing shared memory context descriptor
+struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path)
+{
+    int shm_fd = shm_open(path, O_RDWR, 0666);
+    if (shm_fd == -1)
+    {
+        perror("shm_open");
         return NULL;
     }
 
-    return addr;
-}
-
-// Unmap shared memory segment
-void unmap_shared_memory(void *addr, size_t total_size) {
-    if (munmap(addr, total_size) == -1) {
-        perror("munmap");
+    size_t total_size = sizeof(struct SharedMemoryContext);
+    struct SharedMemoryContext *context = (struct SharedMemoryContext*) mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (context == MAP_FAILED)
+    {
+        perror("mmap");
+        close(shm_fd);
+        return NULL;
     }
-}
 
-// Close shared memory segment
-void close_shared_memory(int shm_fd) {
     close(shm_fd);
+    return context;
 }
 
-// Add a new video buffer to shared memory
-int add_new_video_buffer(void *shared_mem, const char *stream_name, size_t width, size_t height, size_t channels) {
-    VideoBufferList *buffer_list = (VideoBufferList*)shared_mem;
-    size_t new_frame_index = buffer_list->count;
-    VideoFrame *frame = &buffer_list->frames[new_frame_index];
-
-    strncpy(frame->name, stream_name, sizeof(frame->name) - 1);
-    frame->name[sizeof(frame->name) - 1] = '\0';
-    frame->width = width;
-    frame->height = height;
-    frame->channels = channels;
-    frame->frame_size = width * height * channels;
-    frame->data = (unsigned char*)(shared_mem + sizeof(VideoBufferList) + new_frame_index * (sizeof(VideoFrame) + frame->frame_size));
-
-    buffer_list->count += 1;
-
-    return 0;
-}
-
-// Get a pointer to a video buffer by name
-VideoFrame* get_video_buffer_ptr(void *shared_mem, const char *stream_name) {
-    VideoBufferList *buffer_list = (VideoBufferList*)shared_mem;
-
-    for (size_t i = 0; i < buffer_list->count; ++i) {
-        if (strncmp(buffer_list->frames[i].name, stream_name, sizeof(buffer_list->frames[i].name)) == 0) {
-            return &buffer_list->frames[i];
+// Get a pointer to a video buffer by feed name
+struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext *smvc, const char *feedName)
+{
+    for (unsigned int i = 0; i < smvc->numberOfBuffers; i++)
+    {
+        if (strncmp(smvc->buffer[i].name, feedName, sizeof(smvc->buffer[i].name)) == 0)
+        {
+            return &smvc->buffer[i];
         }
     }
-
     return NULL;
 }
 
-// Get a copy of the video frame structure by name
-int get_video_buffer(void *shared_mem, const char *stream_name, VideoFrame *frame) {
-    VideoFrame *frame_ptr = get_video_buffer_ptr(shared_mem, stream_name);
-    if (frame_ptr == NULL) {
-        return -1;
+// Start writing to a video buffer
+int startWritingToVideoBufferPointer(struct VideoFrame *vf)
+{
+    if (__sync_lock_test_and_set(&vf->locked, 1))
+    {
+        return -1; // Buffer is already locked
     }
-
-    memcpy(frame, frame_ptr, sizeof(VideoFrame));
     return 0;
 }
 
-// Write data to a video frame
-void write_video_frame(VideoFrame *frame, unsigned char *data) {
-    memcpy(frame->data, data, frame->frame_size);
+// Stop writing to a video buffer
+int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
+{
+    __sync_lock_release(&vf->locked);
+    return 0;
 }
 
-// Read data from a video frame
-void read_video_frame(VideoFrame *frame, unsigned char *buffer) {
-    memcpy(buffer, frame->data, frame->frame_size);
+// Start reading from a video buffer
+int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
+{
+    if (__sync_fetch_and_add(&vf->locked, 0))
+    {
+        return -1; // Buffer is locked
+    }
+    return 0;
+}
+
+// Stop reading from a video buffer
+int stopReadingFromVideoBufferPointer(struct VideoFrame *vf)
+{
+    // No-op for readers
+    return 0;
 }
