@@ -35,11 +35,6 @@ int createSharedMemoryContextDescriptor(const char *path)
 
     // Initialize the shared memory context
     context->numberOfBuffers = 0;
-    for (unsigned int i = 0; i < MAX_NUMBER_OF_BUFFERS; i++)
-    {
-        context->buffer[i].locked = 0;
-        context->buffer[i].data = (unsigned char*)(context + 1) + i * (640 * 480 * 3); // Adjust size as needed
-    }
 
     munmap(context, total_size);
     close(shm_fd);
@@ -67,6 +62,57 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
 
     close(shm_fd);
     return context;
+}
+
+// Create shared memory for a video frame
+int create_frame_shared_memory(struct VideoFrame *frame)
+{
+    int shm_fd = shm_open(frame->name, O_CREAT | O_RDWR, 0666);
+    if (shm_fd == -1)
+    {
+        perror("shm_open frame");
+        return -1;
+    }
+
+    if (ftruncate(shm_fd, frame->frame_size) == -1)
+    {
+        perror("ftruncate frame");
+        close(shm_fd);
+        return -1;
+    }
+
+    frame->data = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (frame->data == MAP_FAILED)
+    {
+        perror("mmap frame");
+        close(shm_fd);
+        return -1;
+    }
+
+    close(shm_fd);
+    return 0;
+}
+
+// Map existing shared memory for a video frame
+int map_frame_shared_memory(struct VideoFrame *frame)
+{
+    int shm_fd = shm_open(frame->name, O_RDWR, 0666);
+    if (shm_fd == -1)
+    {
+        perror("shm_open frame");
+        return -1;
+    }
+
+    frame->data = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (frame->data == MAP_FAILED)
+    {
+        perror("mmap frame");
+        close(shm_fd);
+        return -1;
+    }
+
+    close(shm_fd);
+    return 0;
 }
 
 // Get a pointer to a video buffer by feed name

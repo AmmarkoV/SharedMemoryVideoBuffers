@@ -19,15 +19,17 @@
 
 #define SHM_NAME "/video_frames"
 
-int main() {
+int main()
+{
     // Server process
-    if (createSharedMemoryContextDescriptor(SHM_NAME) == -1) {
+    if (createSharedMemoryContextDescriptor(SHM_NAME) == -1)
+    {
         return EXIT_FAILURE;
     }
 
-    // Client process
     struct SharedMemoryContext *context = connectToSharedMemoryContextDescriptor(SHM_NAME);
-    if (!context) {
+    if (!context)
+    {
         return EXIT_FAILURE;
     }
 
@@ -39,11 +41,35 @@ int main() {
     newBuffer->channels = 3;
     newBuffer->frame_size = newBuffer->width * newBuffer->height * newBuffer->channels;
 
+    if (create_frame_shared_memory(newBuffer) == -1)
+    {
+        return EXIT_FAILURE;
+    }
+
+    // Client process
+    struct SharedMemoryContext *clientContext = connectToSharedMemoryContextDescriptor(SHM_NAME);
+    if (!clientContext)
+    {
+        return EXIT_FAILURE;
+    }
+
+    struct VideoFrame *frame = getVideoBufferPointer(clientContext, "stream1");
+    if (!frame)
+    {
+        return EXIT_FAILURE;
+    }
+
+    if (map_frame_shared_memory(frame) == -1)
+    {
+        return EXIT_FAILURE;
+    }
+
     // Example to write to buffer (Client)
-    struct VideoFrame *frame = getVideoBufferPointer(context, "stream1");
-    if (frame && startWritingToVideoBufferPointer(frame) == 0) {
+    if (startWritingToVideoBufferPointer(frame) == 0)
+    {
         unsigned char *data = (unsigned char*)malloc(frame->frame_size);
-        for (size_t i = 0; i < frame->frame_size; i++) {
+        for (size_t i = 0; i < frame->frame_size; i++)
+        {
             data[i] = i % 256;
         }
         memcpy(frame->data, data, frame->frame_size);
@@ -52,7 +78,8 @@ int main() {
     }
 
     // Example to read from buffer (Client)
-    if (frame && startReadingFromVideoBufferPointer(frame) == 0) {
+    if (startReadingFromVideoBufferPointer(frame) == 0)
+    {
         unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
         memcpy(buffer, frame->data, frame->frame_size);
         stopReadingFromVideoBufferPointer(frame);

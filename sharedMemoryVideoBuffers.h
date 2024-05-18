@@ -47,8 +47,14 @@ struct SharedMemoryContext
 // Server process functions
 int createSharedMemoryContextDescriptor(const char *path);
 
+
 // Client process functions
 struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path);
+
+
+int create_frame_shared_memory(struct VideoFrame *frame);
+
+int map_frame_shared_memory(struct VideoFrame *frame);
 
 // Buffer management functions
 struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext *smvc, const char *feedName);
