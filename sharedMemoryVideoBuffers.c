@@ -7,7 +7,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-
+#define NORMAL   "\033[0m"
+#define BLACK   "\033[30m"      /* Black */
+#define RED     "\033[31m"      /* Red */
+#define GREEN   "\033[32m"      /* Green */
+#define YELLOW  "\033[33m"      /* Yellow */
 
 unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 {
@@ -73,6 +77,7 @@ int createSharedMemoryContextDescriptor(const char *path)
     int shm_fd = shm_open(path, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1)
     {
+        fprintf(stderr,RED "shm_open\n" NORMAL);
         perror("shm_open");
         return -1;
     }
@@ -80,6 +85,7 @@ int createSharedMemoryContextDescriptor(const char *path)
     size_t total_size = sizeof(struct SharedMemoryContext);
     if (ftruncate(shm_fd, total_size) == -1)
     {
+        fprintf(stderr,RED "ftruncate\n" NORMAL);
         perror("ftruncate");
         close(shm_fd);
         return -1;
@@ -88,6 +94,7 @@ int createSharedMemoryContextDescriptor(const char *path)
     struct SharedMemoryContext *context = (struct SharedMemoryContext*) mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
     if (context == MAP_FAILED)
     {
+        fprintf(stderr,RED "mmap\n" NORMAL);
         perror("mmap");
         close(shm_fd);
         return -1;
@@ -96,6 +103,7 @@ int createSharedMemoryContextDescriptor(const char *path)
     // Initialize the shared memory context
     context->numberOfBuffers = 0;
 
+    memset(context, 0, total_size);
     munmap(context, total_size);
     close(shm_fd);
     return 0;
@@ -107,6 +115,7 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
     int shm_fd = shm_open(path, O_RDWR, 0666);
     if (shm_fd == -1)
     {
+        fprintf(stderr,RED "shm_open frame\n" NORMAL);
         perror("shm_open");
         return NULL;
     }
@@ -115,6 +124,7 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
     struct SharedMemoryContext *context = (struct SharedMemoryContext*) mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
     if (context == MAP_FAILED)
     {
+        fprintf(stderr,RED "mmap\n" NORMAL);
         perror("mmap");
         close(shm_fd);
         return NULL;
@@ -130,12 +140,14 @@ int create_frame_shared_memory(struct VideoFrame *frame)
     int shm_fd = shm_open(frame->name, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1)
     {
+        fprintf(stderr,RED "shm_open frame\n" NORMAL);
         perror("shm_open frame");
         return -1;
     }
 
     if (ftruncate(shm_fd, frame->frame_size) == -1)
     {
+        fprintf(stderr,RED "ftruncate frame\n" NORMAL);
         perror("ftruncate frame");
         close(shm_fd);
         return -1;
@@ -144,11 +156,13 @@ int create_frame_shared_memory(struct VideoFrame *frame)
     frame->data = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
     if (frame->data == MAP_FAILED)
     {
+        fprintf(stderr,RED "mmap frame\n" NORMAL);
         perror("mmap frame");
         close(shm_fd);
         return -1;
     }
 
+    frame->locked = 0;  // Initialize the lock to 0
     close(shm_fd);
     return 0;
 }
@@ -159,6 +173,7 @@ int map_frame_shared_memory(struct VideoFrame *frame)
     int shm_fd = shm_open(frame->name, O_RDWR, 0666);
     if (shm_fd == -1)
     {
+        fprintf(stderr,RED "shm_open frame\n" NORMAL);
         perror("shm_open frame");
         return -1;
     }
@@ -166,6 +181,7 @@ int map_frame_shared_memory(struct VideoFrame *frame)
     frame->data = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
     if (frame->data == MAP_FAILED)
     {
+        fprintf(stderr,RED "mmap frame\n" NORMAL);
         perror("mmap frame");
         close(shm_fd);
         return -1;
@@ -191,27 +207,35 @@ struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext *smvc, const
 // Start writing to a video buffer
 int startWritingToVideoBufferPointer(struct VideoFrame *vf)
 {
+    fprintf(stderr,"startWritingToVideoBufferPointer :");
     if (__sync_lock_test_and_set(&vf->locked, 1))
     {
+        fprintf(stderr,RED "failed\n" NORMAL);
         return -1; // Buffer is already locked
     }
+    fprintf(stderr,GREEN "success\n" NORMAL);
     return 0;
 }
 
 // Stop writing to a video buffer
 int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
 {
+    fprintf(stderr,"stopWritingToVideoBufferPointer :");
     __sync_lock_release(&vf->locked);
+    fprintf(stderr,GREEN "success\n" NORMAL);
     return 0;
 }
 
 // Start reading from a video buffer
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
+    fprintf(stderr,"startReadingFromVideoBufferPointer :");
     if (__sync_fetch_and_add(&vf->locked, 0))
     {
+        fprintf(stderr,RED "failed\n" NORMAL);
         return -1; // Buffer is locked
     }
+    fprintf(stderr,GREEN "success\n" NORMAL);
     return 0;
 }
 

@@ -27,9 +27,9 @@ struct VideoFrame
 {
     char locked;
     char name[256];
-    size_t width;
-    size_t height;
-    size_t channels;
+    unsigned int width;
+    unsigned int height;
+    unsigned int channels;
     size_t frame_size;
     unsigned char *data;
 };

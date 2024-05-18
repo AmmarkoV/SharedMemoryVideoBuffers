@@ -6,35 +6,46 @@
 #include <unistd.h>
 
 
-int main() {
+int main()
+{
     const char *shm_name = "/video_frames";
 
-    if (createSharedMemoryContextDescriptor(shm_name) == -1) {
+    if (createSharedMemoryContextDescriptor(shm_name) == -1)
+    {
         return EXIT_FAILURE;
     }
 
     struct SharedMemoryContext *context = connectToSharedMemoryContextDescriptor(shm_name);
-    if (!context) {
+    if (!context)
+    {
         return EXIT_FAILURE;
     }
 
     printf("Server is ready. Press Enter to encode frames.\n");
 
-    while (1) {
+    while (1)
+    {
         getchar();  // Wait for Enter key
 
-        for (unsigned int i = 0; i < context->numberOfBuffers; i++) 
+        for (unsigned int i = 0; i < context->numberOfBuffers; i++)
         {
             struct VideoFrame *frame = &context->buffer[i];
 
-            if (frame->data != NULL) {
+            if (frame->data != NULL)
+            {
+
+                fprintf(stderr,"Frame %u - %ux%u:%u\n",i,frame->width,frame->height,frame->channels);
+
                 char filename[256];
                 snprintf(filename, sizeof(filename), "server_stream%u.pnm", i);
 
-                if (startReadingFromVideoBufferPointer(frame) == 0) {
+                if (startReadingFromVideoBufferPointer(frame) == 0)
+                {
                     WriteVideoFrame(filename, frame);
                     stopReadingFromVideoBufferPointer(frame);
-                } else {
+                }
+                else
+                {
                     fprintf(stderr, "Failed to lock buffer %u for reading\n", i);
                 }
             }
