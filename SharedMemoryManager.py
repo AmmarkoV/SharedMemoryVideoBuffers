@@ -1,3 +1,5 @@
+import ctypes
+
 
 class SharedMemoryManager:
     def __init__(self, size):
@@ -5,7 +7,7 @@ class SharedMemoryManager:
         self.shm = ctypes.CDLL(None).shm_open
         self.shm.restype = ctypes.c_void_p
         self.shm.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
-        self.shm_name = "/example_shm"
+        self.shm_name = "video_frames.shm"
         self.shm_fd = self.shm(self.shm_name.encode(), ctypes.c_int(2), ctypes.c_int(0o777))
 
         # Set the size of the shared memory segment

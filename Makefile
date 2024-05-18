@@ -1,14 +1,18 @@
 CC = gcc
-CFLAGS = -Wall -pthread -lrt -lm
-SERVER_SRC = server.c sharedMemoryVideoBuffers.c
-CLIENT_SRC = client.c sharedMemoryVideoBuffers.c
-SERVER_OBJ = $(SERVER_SRC:.c=.o)
-CLIENT_OBJ = $(CLIENT_SRC:.c=.o)
-TARGETS = server client
+CFLAGS       = -Wall -pthread -lrt -lm
+LDFLAGS      = -shared -fPIC
+SERVER_SRC   = server.c sharedMemoryVideoBuffers.c
+CLIENT_SRC   = client.c sharedMemoryVideoBuffers.c
+LIBRARY_SRC  = sharedMemoryVideoBuffers.c
+SERVER_OBJ   = $(SERVER_SRC:.c=.o)
+CLIENT_OBJ   = $(CLIENT_SRC:.c=.o)
+LIBRARY_OBJ  = $(LIBRARY_SRC:.c=.o)
+LIBRARY_NAME = libSharedMemoryVideoBuffers.so
+TARGETS      = server client $(LIBRARY_NAME)
 
 .PHONY: all clean
 
-all: $(TARGETS)
+all: $(TARGETS) $(LIBRARY_NAME)
 
 server: $(SERVER_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -16,9 +20,12 @@ server: $(SERVER_OBJ)
 client: $(CLIENT_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^
 
+$(LIBRARY_NAME): $(LIBRARY_OBJ)
+	$(CC) $(LDFLAGS)  $< -o $@
+
 %.o: %.c
-	$(CC) $(CFLAGS) -c $<
+	$(CC) $(CFLAGS) -fPIC -c $<
 
 clean:
-	rm -f $(SERVER_OBJ) $(CLIENT_OBJ) $(TARGETS)
+	rm -f $(SERVER_OBJ) $(CLIENT_OBJ) $(TARGETS) $(LIBRARY_NAME)
 
