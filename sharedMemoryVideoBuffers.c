@@ -71,7 +71,7 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic)
 // Function to copy data from a buffer to the shared memory buffer
 void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
 {
-  if(frame!=0)
+  if ( (frame!=0) && (src!=0) && (n!=0) )
     {
         if (frame->data!=0)
         {

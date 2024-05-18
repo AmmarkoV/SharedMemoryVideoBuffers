@@ -74,10 +74,12 @@ class SharedMemoryManager:
         # Copy the array data to shared memory
         array_ptr = array.ctypes.data_as(ctypes.c_void_p)
         size      = array.nbytes
-        print("copy_to_shared_memory ")
-        self.libSharedMemoryVideoBuffers.copy_to_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_void_p,ctypes.c_uint]
-        self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size)
-
+        try:
+          print("copy_to_shared_memory ",size," bytes (",array.shape[0] * array.shape[1] * array.shape[2],")")
+          self.libSharedMemoryVideoBuffers.copy_to_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_void_p,ctypes.c_uint]
+          self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size)
+        except Exception as e:
+          print("An exception occurred while copy_to_shared_memory:", str(e))
 
         print("stopWritingToVideoBufferPointer ")
         # Copy the array data to shared memory
