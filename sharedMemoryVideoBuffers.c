@@ -69,9 +69,8 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic)
 }
 
 // Function to copy data from a buffer to the shared memory buffer
-void copy_to_shared_memory(void *frameV, const void* src, size_t n)
+void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
 {
-  struct VideoFrame *frame = (struct VideoFrame *) frameV;
   if(frame!=0)
     {
         if (frame->data!=0)
@@ -245,9 +244,8 @@ int map_frame_shared_memory(struct VideoFrame *frame)
 }
 
 // Get a pointer to a video buffer by feed name
-struct VideoFrame* getVideoBufferPointer(void *smvcV, const char *feedName)
+struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, const char *feedName)
 {
-    struct SharedMemoryContext * smvc = (struct SharedMemoryContext *) smvcV;
     for (unsigned int i = 0; i < smvc->numberOfBuffers; i++)
     {
         if (strncmp(smvc->buffer[i].name, feedName, sizeof(smvc->buffer[i].name)) == 0)
