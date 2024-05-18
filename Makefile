@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS       = -Wall -pthread -lrt -lm
-LDFLAGS      = -shared -fPIC
+CFLAGS       = -Wall -pthread -lrt -lm -g
+LDFLAGS      = -shared -fPIC -g
 SERVER_SRC   = server.c sharedMemoryVideoBuffers.c
 CLIENT_SRC   = client.c sharedMemoryVideoBuffers.c
 LIBRARY_SRC  = sharedMemoryVideoBuffers.c

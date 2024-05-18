@@ -56,6 +56,10 @@ int main()
 
 
     srand((unsigned int)time(NULL)); // Seed the random number generator
+
+    while (1)
+    {
+
     fprintf(stderr,"Write dummy data\n");
     // Example to write to buffer (Client)
     if (startWritingToVideoBufferPointer(frame) == 0)
@@ -81,6 +85,10 @@ int main()
         memcpy(buffer, frame->data, frame->frame_size);
         stopReadingFromVideoBufferPointer(frame);
         free(buffer);
+    }
+
+
+     usleep(1000);
     }
 
     fprintf(stderr,"Done..\n");

@@ -75,6 +75,7 @@ class SharedMemoryManager:
         array_ptr = array.ctypes.data_as(ctypes.c_void_p)
         size      = array.nbytes
         try:
+          print(f"copy_to_shared_memory {size} bytes ({array.shape[0]} x {array.shape[1]} x {array.shape[2]})")
           print("copy_to_shared_memory ",size," bytes (",array.shape[0] * array.shape[1] * array.shape[2],")")
           self.libSharedMemoryVideoBuffers.copy_to_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_void_p,ctypes.c_uint]
           self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size)

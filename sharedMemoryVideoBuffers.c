@@ -13,6 +13,42 @@
 #define GREEN   "\033[32m"      /* Green */
 #define YELLOW  "\033[33m"      /* Yellow */
 
+#include <signal.h>
+#include <execinfo.h>
+#include <unistd.h>
+
+void handle_segfault(int sig)
+{
+    void *array[10];
+    size_t size;
+
+    // get void*'s for all entries on the stack
+    size = backtrace(array, 10);
+
+    // print out all the frames to stderr
+    fprintf(stderr, "Error: signal %d:\n", sig);
+    backtrace_symbols_fd(array, size, STDERR_FILENO);
+    //exit(1);
+    abort();
+}
+
+void setup_signal_handlers()
+{
+    struct sigaction sa;
+
+    sa.sa_handler = handle_segfault;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+
+    if (sigaction(SIGSEGV, &sa, NULL) == -1)
+    {
+        perror("sigaction");
+       // exit(EXIT_FAILURE);
+        abort();
+    }
+}
+
+
 unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 {
     if (exp==0) return 1;
@@ -164,6 +200,9 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
 // Connect to existing shared memory context descriptor
 struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path)
 {
+
+    setup_signal_handlers();
+
     int shm_fd = shm_open(path, O_RDWR, 0666);
     if (shm_fd == -1)
     {
