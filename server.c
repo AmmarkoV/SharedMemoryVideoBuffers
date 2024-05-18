@@ -5,10 +5,9 @@
 #include <string.h>
 #include <unistd.h>
 
-
 int main()
 {
-    const char *shm_name = "/video_frames";
+    const char *shm_name = "video_frames.shm";
 
     if (createSharedMemoryContextDescriptor(shm_name) == -1)
     {
@@ -26,15 +25,15 @@ int main()
     while (1)
     {
         getchar();  // Wait for Enter key
-
         for (unsigned int i = 0; i < context->numberOfBuffers; i++)
         {
             struct VideoFrame *frame = &context->buffer[i];
 
             if (frame->data != NULL)
             {
-
-                fprintf(stderr,"Frame %u - %ux%u:%u\n",i,frame->width,frame->height,frame->channels);
+                fprintf(stderr,"Frame %u - %ux%u:%u - ",i,frame->width,frame->height,frame->channels);
+                fprintf(stderr,"%s\n",frame->name);
+                map_frame_shared_memory(frame);
 
                 char filename[256];
                 snprintf(filename, sizeof(filename), "server_stream%u.pnm", i);
@@ -54,4 +53,3 @@ int main()
 
     return EXIT_SUCCESS;
 }
-

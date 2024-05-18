@@ -49,13 +49,13 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic)
             return 1;
         }
 
-        fprintf(fd, "%d %d\n%u\n", pic->width, pic->height , simplePowPPM(2 ,8 )-1);
+        fprintf(fd, "%d %d\n%u\n", pic->width, pic->height , simplePowPPM(2,8)-1);
 
-        float tmp_n = (float) 8 / 8;
-        tmp_n = tmp_n *  pic->width * pic->height * pic->channels ;
-        n = (unsigned int) tmp_n;
+        n =  pic->width * pic->height * pic->channels;
 
+        //fprintf(stderr,"fwrite(pic->data, 1 , n , fd);\n");
         fwrite(pic->data, 1 , n , fd);
+        //fprintf(stderr,"survived\n");
         fflush(fd);
         fclose(fd);
         return 1;
@@ -67,8 +67,6 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic)
     }
     return 0;
 }
-
-
 
 
 // Create and open shared memory context descriptor

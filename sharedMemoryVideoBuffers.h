@@ -20,13 +20,14 @@ extern "C"
 
 #include <stddef.h>
 
+#define MAX_SHM_NAME 256
 #define MAX_NUMBER_OF_BUFFERS 10
 
 // Define a structure to hold video frame metadata
 struct VideoFrame
 {
     char locked;
-    char name[256];
+    char name[MAX_SHM_NAME+1];
     unsigned int width;
     unsigned int height;
     unsigned int channels;
@@ -41,20 +42,13 @@ struct SharedMemoryContext
    struct VideoFrame buffer[MAX_NUMBER_OF_BUFFERS];
 
 };
-
-
 int WriteVideoFrame(const char * filename,struct VideoFrame * pic);
-
-
-// Function declarations
 
 // Server process functions
 int createSharedMemoryContextDescriptor(const char *path);
 
-
 // Client process functions
 struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path);
-
 
 int create_frame_shared_memory(struct VideoFrame *frame);
 
@@ -73,5 +67,3 @@ int stopReadingFromVideoBufferPointer(struct VideoFrame *vf);
 #endif
 
 #endif // SHAREDMEMORYVIDEOBUFFERS_H_INCLUDED
-
-

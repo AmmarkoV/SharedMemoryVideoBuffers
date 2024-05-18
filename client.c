@@ -17,7 +17,7 @@
 
 #include "sharedMemoryVideoBuffers.h"
 
-#define SHM_NAME "/video_frames"
+#define SHM_NAME "video_frames.shm"
 
 int main()
 {
@@ -35,10 +35,10 @@ int main()
 
     // Example to add a new buffer (Server)
     struct VideoFrame *newBuffer = &context->buffer[context->numberOfBuffers++];
-    strncpy(newBuffer->name, "stream1", sizeof(newBuffer->name));
-    newBuffer->width = 640;
-    newBuffer->height = 480;
-    newBuffer->channels = 3;
+    snprintf(newBuffer->name,MAX_SHM_NAME,"stream1");
+    newBuffer->width      = 640;
+    newBuffer->height     = 480;
+    newBuffer->channels   = 3;
     newBuffer->frame_size = newBuffer->width * newBuffer->height * newBuffer->channels;
 
     if (create_frame_shared_memory(newBuffer) == -1)
@@ -64,6 +64,7 @@ int main()
         return EXIT_FAILURE;
     }
 
+    fprintf(stderr,"Write dummy data\n");
     // Example to write to buffer (Client)
     if (startWritingToVideoBufferPointer(frame) == 0)
     {
@@ -77,6 +78,7 @@ int main()
         free(data);
     }
 
+    fprintf(stderr,"Read dummy data\n");
     // Example to read from buffer (Client)
     if (startReadingFromVideoBufferPointer(frame) == 0)
     {
@@ -86,5 +88,6 @@ int main()
         free(buffer);
     }
 
+    fprintf(stderr,"Done..\n");
     return EXIT_SUCCESS;
 }
