@@ -26,13 +26,22 @@ extern "C"
 // Define a structure to hold video frame metadata
 struct VideoFrame
 {
+    //Shared Data
+    //-----------------------------------------------------------------------------------------------------------
     char locked;
     char name[MAX_SHM_NAME+1];
     unsigned int width;
     unsigned int height;
     unsigned int channels;
     size_t frame_size;
-    unsigned char *data;
+    //-----------------------------------------------------------------------------------------------------------
+    unsigned char *data; //<- BE VERY CAREFUL THIS POINTS TO THE CLIENT DATA, and is an invalid pointer for other processes
+};
+
+// Define a structure to hold video frame metadata
+struct VideoFrameLocalMapping
+{
+    unsigned char *data[MAX_NUMBER_OF_BUFFERS];
 };
 
 
@@ -40,10 +49,13 @@ struct SharedMemoryContext
 {
    unsigned int numberOfBuffers;
    struct VideoFrame buffer[MAX_NUMBER_OF_BUFFERS];
-
 };
-int WriteVideoFrame(const char * filename,struct VideoFrame * pic);
 
+
+
+int WriteVideoFrame(const char * filename,struct VideoFrame * pic, unsigned char * data);
+
+void printSharedMemoryContextState(struct SharedMemoryContext *context);
 // Server process functions
 int createSharedMemoryContextDescriptor(const char *path);
 
@@ -54,7 +66,9 @@ int create_frame_shared_memory(struct VideoFrame *frame);
 
 int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels);
 void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n);
-int map_frame_shared_memory(struct VideoFrame *frame);
+
+
+unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideoFramePointer);
 
 // Buffer management functions
 struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, const char *feedName);

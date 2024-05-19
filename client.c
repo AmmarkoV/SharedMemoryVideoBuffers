@@ -15,20 +15,19 @@
 #include <time.h>
 #include <unistd.h>
 
-
 #include "sharedMemoryVideoBuffers.h"
 
-#define SHM_NAME "video_frames.shm"
 
 int main()
 {
-    // Server process
-    if (createSharedMemoryContextDescriptor(SHM_NAME) == -1)
+    const char *shm_name = "video_frames.shm";
+    // Client process
+    if (createSharedMemoryContextDescriptor(shm_name) == -1)
     {
         return EXIT_FAILURE;
     }
 
-    struct SharedMemoryContext *context = connectToSharedMemoryContextDescriptor(SHM_NAME);
+    struct SharedMemoryContext *context = connectToSharedMemoryContextDescriptor(shm_name);
     if (!context)
     {
         return EXIT_FAILURE;
@@ -36,20 +35,14 @@ int main()
 
     createVideoFrameMetaData(context,"stream1",640,480,3);
 
-    // Client process
-    struct SharedMemoryContext *clientContext = connectToSharedMemoryContextDescriptor(SHM_NAME);
-    if (!clientContext)
-    {
-        return EXIT_FAILURE;
-    }
-
-    struct VideoFrame *frame = getVideoBufferPointer(clientContext, "stream1");
+    struct VideoFrame *frame = getVideoBufferPointer(context, "stream1");
     if (!frame)
     {
         return EXIT_FAILURE;
     }
 
-    if (map_frame_shared_memory(frame) == -1)
+    struct VideoFrameLocalMapping localMap={0};
+    if (map_frame_shared_memory(frame,1) == NULL)  //We want to overwrite the frame->data because we are the client and this makes the python API easier
     {
         return EXIT_FAILURE;
     }
@@ -59,8 +52,8 @@ int main()
 
     while (1)
     {
-
-    fprintf(stderr,"Write dummy data\n");
+    printSharedMemoryContextState(context);
+    fprintf(stderr,"Write %lu bytes of dummy data\n",frame->frame_size);
     // Example to write to buffer (Client)
     if (startWritingToVideoBufferPointer(frame) == 0)
     {
@@ -76,19 +69,25 @@ int main()
         stopWritingToVideoBufferPointer(frame);
         free(data);
     }
+     usleep(5000);
 
-    fprintf(stderr,"Read dummy data\n");
+    fprintf(stderr,"Read %lu bytes of dummy data\n",frame->frame_size);
     // Example to read from buffer (Client)
     if (startReadingFromVideoBufferPointer(frame) == 0)
     {
         unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
-        memcpy(buffer, frame->data, frame->frame_size);
-        stopReadingFromVideoBufferPointer(frame);
-        free(buffer);
+        if (buffer!=0)
+        {
+         memcpy(buffer, frame->data, frame->frame_size);
+         stopReadingFromVideoBufferPointer(frame);
+         free(buffer);
+        } else
+        {
+         fprintf(stderr,"Failed reading back dummy data..\n");
+        }
     }
+     usleep(5000);
 
-
-     usleep(1000);
     }
 
     fprintf(stderr,"Done..\n");

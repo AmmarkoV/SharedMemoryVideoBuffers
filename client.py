@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from SharedMemoryManager import SharedMemoryManager
 
-def main():
+def main(streamName):
     # Open the first webcam connected to the computer
     cap = cv2.VideoCapture(0)
     
@@ -15,7 +15,7 @@ def main():
     ret, frame = cap.read()
     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
                               descriptor = "video_frames.shm", 
-                              frameName  = "stream1", 
+                              frameName  = streamName, 
                               width      = frame.shape[1],
                               height     = frame.shape[0],
                               channels   = frame.shape[2])
@@ -46,5 +46,11 @@ def main():
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+    import sys
+    streamName = "stream1"
+    if len(sys.argv) != 2 :
+        print("\n\nYou did not supply a stream name, assuming ",streamName) 
+
+    streamName = sys.argv[1]
+    main(streamName)
 

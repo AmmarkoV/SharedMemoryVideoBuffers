@@ -7,8 +7,10 @@
 
 int main()
 {
+    struct VideoFrameLocalMapping localMap={0};
     const char *shm_name = "video_frames.shm";
 
+    //Server creates and zeroes out all existing data..
     if (createSharedMemoryContextDescriptor(shm_name) == -1)
     {
         return EXIT_FAILURE;
@@ -33,21 +35,25 @@ int main()
             {
                 fprintf(stderr,"Frame %u - %ux%u:%u - ",i,frame->width,frame->height,frame->channels);
                 fprintf(stderr,"%s\n",frame->name);
-                map_frame_shared_memory(frame);
 
                 char filename[256];
                 snprintf(filename, sizeof(filename), "server_stream%u.pnm", i);
 
+                //Dont copy the mmapped memory pointer to the "frame" data because we are the server and we dont want to overwrite the data of the client
+                localMap.data[i] = map_frame_shared_memory(frame,0);
                 if (startReadingFromVideoBufferPointer(frame) == 0)
                 {
-                    WriteVideoFrame(filename, frame);
+                    printSharedMemoryContextState(context);
+                    WriteVideoFrame(filename, frame, localMap.data[i]);
                     stopReadingFromVideoBufferPointer(frame);
                 }
                 else
                 {
                     fprintf(stderr, "Failed to lock buffer %u for reading\n", i);
                 }
+
             }
+
         }
     }
 

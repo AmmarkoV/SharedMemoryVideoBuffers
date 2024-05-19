@@ -62,12 +62,12 @@ unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 }
 
 
-int WriteVideoFrame(const char * filename,struct VideoFrame * pic)
+int WriteVideoFrame(const char * filename,struct VideoFrame * pic, unsigned char * data)
 {
     //fprintf(stderr,"saveRawImageToFile(%s) called\n",filename);
     if (pic==0) { return 0; }
 
-    if(pic->data==0) { fprintf(stderr,"saveRawImageToFile(%s) called for an unallocated (empty) frame , will not write any file output\n",filename); return 0; }
+    if(data==0) { fprintf(stderr,"saveRawImageToFile(%s) called for an unallocated (empty) frame , will not write any file output\n",filename); return 0; }
 
 
     FILE *fd=0;
@@ -90,7 +90,7 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic)
         n =  pic->width * pic->height * pic->channels;
 
         //fprintf(stderr,"fwrite(pic->data, 1 , n , fd);\n");
-        fwrite(pic->data, 1 , n , fd);
+        fwrite(data, 1 , n , fd);
         //fprintf(stderr,"survived\n");
         fflush(fd);
         fclose(fd);
@@ -113,10 +113,21 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
         {
            if (frame->frame_size >= n)
            {
+             fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,frame->data);
              memcpy(frame->data,src, n);
            }
         }
     }
+}
+
+void printSharedMemoryContextState(struct SharedMemoryContext *context)
+{
+  if (context==0) { fprintf(stderr,"Empty Context\n"); return; }
+  fprintf(stderr,"Populated Streams : %u\n",context->numberOfBuffers);
+  for (int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
+     {
+         fprintf(stderr,"Bank %u : %ux%u:%u @ %p\n",i,context->buffer[i].width,context->buffer[i].height,context->buffer[i].channels,context->buffer[i].data);
+     }
 }
 
 // Create and open shared memory context descriptor
@@ -152,6 +163,7 @@ int createSharedMemoryContextDescriptor(const char *path)
     context->numberOfBuffers = 0;
 
     memset(context, 0, total_size);
+    printSharedMemoryContextState(context);
     munmap(context, total_size);
     close(shm_fd);
     return 0;
@@ -161,8 +173,8 @@ int createSharedMemoryContextDescriptor(const char *path)
 
 int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels)
 {
-    if (context!=0)
-    {
+   if (context!=0)
+   {
       int contextID = -1;
       for (int i=0; i<context->numberOfBuffers; i++)
       {
@@ -175,23 +187,23 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
 
       if (contextID==-1)
       {
+         fprintf(stderr,"Creating new stream %s\n",streamName);
          contextID = context->numberOfBuffers++;
       }
     // Example to add a new buffer (Server)
     struct VideoFrame *newBuffer = &context->buffer[contextID];
-    snprintf(newBuffer->name,MAX_SHM_NAME,"stream1");
+    snprintf(newBuffer->name,MAX_SHM_NAME,"%s",streamName);
     newBuffer->width      = width;
     newBuffer->height     = height;
     newBuffer->channels   = channels;
     newBuffer->frame_size = newBuffer->width * newBuffer->height * newBuffer->channels;
 
-    if (create_frame_shared_memory(newBuffer) == -1)
+    if (create_frame_shared_memory(newBuffer) == 0)
     {
-        return EXIT_FAILURE;
+     return EXIT_SUCCESS;
     }
-    return EXIT_SUCCESS;
 
-    }
+   }
    return EXIT_FAILURE;
 }
 
@@ -228,6 +240,9 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
 // Create shared memory for a video frame
 int create_frame_shared_memory(struct VideoFrame *frame)
 {
+    if (frame==0) {return -1; }
+
+    fprintf(stderr,"Creating new video frame shared memory for %s\n",frame->name);
     int shm_fd = shm_open(frame->name, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1)
     {
@@ -244,7 +259,9 @@ int create_frame_shared_memory(struct VideoFrame *frame)
         return -1;
     }
 
+    fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,frame->frame_size);
     frame->data = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    fprintf(stderr,"MMAP pointer for %s @ %p\n",frame->name,frame->data);
     if (frame->data == MAP_FAILED)
     {
         fprintf(stderr,RED "mmap frame\n" NORMAL);
@@ -259,32 +276,44 @@ int create_frame_shared_memory(struct VideoFrame *frame)
 }
 
 // Map existing shared memory for a video frame
-int map_frame_shared_memory(struct VideoFrame *frame)
+unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideoFramePointer)
 {
+    unsigned char * result = NULL;
+    fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,frame->frame_size);
+    if (frame==0)    { return NULL; }
+
     int shm_fd = shm_open(frame->name, O_RDWR, 0666);
-    if (shm_fd == -1)
+    if (shm_fd  == -1)
     {
         fprintf(stderr,RED "shm_open frame\n" NORMAL);
         perror("shm_open frame");
-        return -1;
+        return NULL;
     }
 
-    frame->data = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (frame->data == MAP_FAILED)
+    result = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd , 0); //
+    if (result  == MAP_FAILED)
     {
         fprintf(stderr,RED "mmap frame\n" NORMAL);
         perror("mmap frame");
         close(shm_fd);
-        return -1;
+        return NULL;
     }
 
+    if (copyToVideoFramePointer)
+    {
+        frame->data = result;
+    }
+
+    fprintf(stderr,"MMAP shared memory now points at %p\n",result);
     close(shm_fd);
-    return 0;
+    return result;
 }
 
 // Get a pointer to a video buffer by feed name
 struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, const char *feedName)
 {
+    if (smvc==0) {return NULL; }
+
     for (unsigned int i = 0; i < smvc->numberOfBuffers; i++)
     {
         if (strncmp(smvc->buffer[i].name, feedName, sizeof(smvc->buffer[i].name)) == 0)
@@ -298,6 +327,8 @@ struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, cons
 // Start writing to a video buffer
 int startWritingToVideoBufferPointer(struct VideoFrame *vf)
 {
+    if (vf==0) {return -1; }
+
     fprintf(stderr,"startWritingToVideoBufferPointer :");
     if (__sync_lock_test_and_set(&vf->locked, 1))
     {
@@ -311,6 +342,7 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
 // Stop writing to a video buffer
 int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
 {
+    if (vf==0) {return -1; }
     fprintf(stderr,"stopWritingToVideoBufferPointer :");
     __sync_lock_release(&vf->locked);
     fprintf(stderr,GREEN "success\n" NORMAL);
@@ -320,6 +352,7 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
 // Start reading from a video buffer
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
+    if (vf==0) {return -1; }
     fprintf(stderr,"startReadingFromVideoBufferPointer :");
     if (__sync_fetch_and_add(&vf->locked, 0))
     {
@@ -333,6 +366,7 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
 // Stop reading from a video buffer
 int stopReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
+    if (vf==0) {return -1; }
     // No-op for readers
     return 0;
 }
