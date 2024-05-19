@@ -79,7 +79,7 @@ int main()
         unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
         if (buffer!=0)
         {
-         memcpy(buffer, frame->data, frame->frame_size);
+         memcpy(buffer, frame->client_address_space_data_pointer, frame->frame_size);
          stopReadingFromVideoBufferPointer(frame);
          free(buffer);
         } else
