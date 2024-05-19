@@ -20,7 +20,8 @@
 
 int main()
 {
-    const char *shm_name = "video_frames.shm";
+    const char *shm_name    = "video_frames.shm";
+    const char *stream_name = "stream1";
     // Client process
     if (createSharedMemoryContextDescriptor(shm_name) == -1)
     {
@@ -33,9 +34,9 @@ int main()
         return EXIT_FAILURE;
     }
 
-    createVideoFrameMetaData(context,"stream1",640,480,3);
+    createVideoFrameMetaData(context,stream_name,640,480,3);
 
-    struct VideoFrame *frame = getVideoBufferPointer(context, "stream1");
+    struct VideoFrame *frame = getVideoBufferPointer(context,stream_name);
     if (!frame)
     {
         return EXIT_FAILURE;
@@ -89,6 +90,8 @@ int main()
      usleep(5000);
 
     }
+
+    destroyVideoFrame(context,stream_name);
 
     fprintf(stderr,"Done..\n");
     return EXIT_SUCCESS;

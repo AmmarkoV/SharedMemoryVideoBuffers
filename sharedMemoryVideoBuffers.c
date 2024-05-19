@@ -170,73 +170,6 @@ int createSharedMemoryContextDescriptor(const char *path)
 }
 
 
-
-int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels)
-{
-   if (context!=0)
-   {
-      int contextID = -1;
-      for (int i=0; i<context->numberOfBuffers; i++)
-      {
-         if (strcmp(streamName,context->buffer[i].name)==0)
-         {
-           fprintf(stderr,"Stream already existing \n");
-           contextID = i;
-         }
-      }
-
-      if (contextID==-1)
-      {
-         fprintf(stderr,"Creating new stream %s\n",streamName);
-         contextID = context->numberOfBuffers++;
-      }
-    // Example to add a new buffer (Server)
-    struct VideoFrame *newBuffer = &context->buffer[contextID];
-    snprintf(newBuffer->name,MAX_SHM_NAME,"%s",streamName);
-    newBuffer->width      = width;
-    newBuffer->height     = height;
-    newBuffer->channels   = channels;
-    newBuffer->frame_size = newBuffer->width * newBuffer->height * newBuffer->channels;
-
-    if (create_frame_shared_memory(newBuffer) == 0)
-    {
-     return EXIT_SUCCESS;
-    }
-
-   }
-   return EXIT_FAILURE;
-}
-
-
-
-// Connect to existing shared memory context descriptor
-struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path)
-{
-
-    setup_signal_handlers();
-
-    int shm_fd = shm_open(path, O_RDWR, 0666);
-    if (shm_fd == -1)
-    {
-        fprintf(stderr,RED "shm_open frame\n" NORMAL);
-        perror("shm_open");
-        return NULL;
-    }
-
-    size_t total_size = sizeof(struct SharedMemoryContext);
-    struct SharedMemoryContext *context = (struct SharedMemoryContext*) mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (context == MAP_FAILED)
-    {
-        fprintf(stderr,RED "mmap\n" NORMAL);
-        perror("mmap");
-        close(shm_fd);
-        return NULL;
-    }
-
-    close(shm_fd);
-    return context;
-}
-
 // Create shared memory for a video frame
 int create_frame_shared_memory(struct VideoFrame *frame)
 {
@@ -322,6 +255,124 @@ struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, cons
         }
     }
     return NULL;
+}
+
+
+int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels)
+{
+   if (context!=0)
+   {
+      int contextID = -1;
+      for (int i=0; i<context->numberOfBuffers; i++)
+      {
+         if (strcmp(streamName,context->buffer[i].name)==0)
+         {
+           fprintf(stderr,"Stream already existing \n");
+           contextID = i;
+         }
+      }
+
+      if (contextID==-1)
+      {
+         fprintf(stderr,"Creating new stream %s\n",streamName);
+         contextID = context->numberOfBuffers++;
+      }
+    // Example to add a new buffer (Server)
+    struct VideoFrame *newBuffer = &context->buffer[contextID];
+    snprintf(newBuffer->name,MAX_SHM_NAME,"%s",streamName);
+    newBuffer->width      = width;
+    newBuffer->height     = height;
+    newBuffer->channels   = channels;
+    newBuffer->frame_size = newBuffer->width * newBuffer->height * newBuffer->channels;
+
+    if (create_frame_shared_memory(newBuffer) == 0)
+    {
+     return EXIT_SUCCESS;
+    }
+
+   }
+   return EXIT_FAILURE;
+}
+
+
+
+// Destroy a video frame and its shared memory
+int destroyVideoFrame(struct SharedMemoryContext* context, const char *streamName)
+{
+    if (context == NULL || streamName == NULL) { return EXIT_FAILURE; }
+
+    int index = -1;
+    for (unsigned int i = 0; i < context->numberOfBuffers; i++)
+    {
+        if (strcmp(context->buffer[i].name, streamName) == 0)
+        {
+            index = i;
+            break;
+        }
+    }
+
+    if (index == -1) {
+        fprintf(stderr, "Stream %s not found\n", streamName);
+        return EXIT_FAILURE;
+    }
+
+    struct VideoFrame *frame = &context->buffer[index];
+
+    if (frame->data != NULL)
+    {
+        // Unmap the shared memory
+        if (munmap(frame->data, frame->frame_size) == -1)
+        {
+            perror("munmap frame");
+            return EXIT_FAILURE;
+        }
+        frame->data = NULL;
+    }
+
+    // Remove the shared memory object
+    if (shm_unlink(frame->name) == -1)
+    {
+        perror("shm_unlink frame");
+        return EXIT_FAILURE;
+    }
+
+    // Shift remaining buffers to fill the gap
+    for (unsigned int i = index; i < context->numberOfBuffers - 1; i++)
+    {
+        context->buffer[i] = context->buffer[i + 1];
+    }
+
+    context->numberOfBuffers--;
+    fprintf(stderr, "Stream %s destroyed\n", streamName);
+    return EXIT_SUCCESS;
+}
+
+// Connect to existing shared memory context descriptor
+struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path)
+{
+
+    setup_signal_handlers();
+
+    int shm_fd = shm_open(path, O_RDWR, 0666);
+    if (shm_fd == -1)
+    {
+        fprintf(stderr,RED "shm_open frame\n" NORMAL);
+        perror("shm_open");
+        return NULL;
+    }
+
+    size_t total_size = sizeof(struct SharedMemoryContext);
+    struct SharedMemoryContext *context = (struct SharedMemoryContext*) mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (context == MAP_FAILED)
+    {
+        fprintf(stderr,RED "mmap\n" NORMAL);
+        perror("mmap");
+        close(shm_fd);
+        return NULL;
+    }
+
+    close(shm_fd);
+    return context;
 }
 
 // Start writing to a video buffer

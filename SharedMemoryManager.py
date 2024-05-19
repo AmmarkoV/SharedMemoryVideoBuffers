@@ -55,9 +55,9 @@ class SharedMemoryManager:
 
         #Map Video Buffer Pointer
         print("Mapping video buffer memory ")
-        self.libSharedMemoryVideoBuffers.map_frame_shared_memory.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.map_frame_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_int]
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = ctypes.c_int
-        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame)
+        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
 
 
     def copy_numpy_to_shared_memory(self, array):

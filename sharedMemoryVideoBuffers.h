@@ -59,12 +59,15 @@ void printSharedMemoryContextState(struct SharedMemoryContext *context);
 // Server process functions
 int createSharedMemoryContextDescriptor(const char *path);
 
+
 // Client process functions
 struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path);
 
 int create_frame_shared_memory(struct VideoFrame *frame);
 
 int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels);
+int destroyVideoFrame(struct SharedMemoryContext* context,const char * streamName);
+
 void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n);
 
 
