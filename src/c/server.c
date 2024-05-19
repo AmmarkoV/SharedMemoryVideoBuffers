@@ -42,11 +42,11 @@ int main()
           }
         }
 
-        for (unsigned int i = 0; i < context->numberOfBuffers; i++)
+        for (unsigned int i = 0; i < getSharedMemoryContextNumberOfBuffers(context); i++)
         {
             struct VideoFrame *frame = &context->buffer[i];
 
-            if (frame->client_address_space_data_pointer != NULL) //If the client has a memory address we are good to go
+            if (remoteSharedMemoryContextVideoFrameIsPopulated(context,i) != 0) //If the client has a memory address we are good to go
             {
                 fprintf(stderr,"Frame %u - %ux%u:%u - %s\n",i,frame->width,frame->height,frame->channels,frame->name);
                 snprintf(filename, sizeof(filename), "data/server_stream%u.pnm", i);
@@ -58,7 +58,7 @@ int main()
                 if (startReadingFromVideoBufferPointer(frame))
                 {
                     printSharedMemoryContextState(context);
-                    writeVideoFrameToImage(filename, frame, localMap->data[i]);
+                    writeVideoFrameToImage(filename, frame, getLocalMappingPointer(localMap,i));
                     stopReadingFromVideoBufferPointer(frame);
                 }
                 else

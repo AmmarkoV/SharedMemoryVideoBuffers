@@ -181,6 +181,38 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
     }
 }
 
+
+int getSharedMemoryContextNumberOfBuffers(struct SharedMemoryContext *context)
+{
+  if (context!=0)
+  {
+     return context->numberOfBuffers;
+  }
+  return 0;
+}
+
+
+struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext *context, int item)
+{
+  if (context!=0)
+  {
+     return &context->buffer[item];
+  }
+  return 0;
+}
+
+int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *context, int item)
+{
+  if (context!=0)
+  {
+     return (context->buffer[item].client_address_space_data_pointer!=NULL);
+  }
+  return 0;
+}
+
+
+
+
 void printSharedMemoryContextState(struct SharedMemoryContext *context)
 {
   if (context==0) { fprintf(stderr,"Empty Context\n"); return; }
@@ -190,6 +222,8 @@ void printSharedMemoryContextState(struct SharedMemoryContext *context)
          fprintf(stderr,"Bank %u : %ux%u:%u @ %p\n",i,context->buffer[i].width,context->buffer[i].height,context->buffer[i].channels,context->buffer[i].client_address_space_data_pointer);
      }
 }
+
+
 
 // Create and open shared memory context descriptor
 int createSharedMemoryContextDescriptor(const char *path)

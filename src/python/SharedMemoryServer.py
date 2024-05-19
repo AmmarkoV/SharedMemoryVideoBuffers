@@ -24,17 +24,30 @@ class SharedMemoryServer:
         lib = ctypes.CDLL("./libSharedMemoryVideoBuffers.so", mode=ctypes.RTLD_GLOBAL)
         lib.allocateLocalMapping.restype = ctypes.POINTER(ctypes.c_void_p)
         lib.createSharedMemoryContextDescriptor.argtypes = [c_char_p]
-        lib.createSharedMemoryContextDescriptor.restype = c_int
+        lib.createSharedMemoryContextDescriptor.restype  = c_int
         lib.connectToSharedMemoryContextDescriptor.argtypes = [c_char_p]
-        lib.connectToSharedMemoryContextDescriptor.restype = c_void_p
-        lib.unmapLocalMappingItem.argtypes = [c_void_p, c_uint]
+        lib.connectToSharedMemoryContextDescriptor.restype  = c_void_p
+        lib.unmapLocalMappingItem.argtypes  = [c_void_p, c_uint]
+        lib.getLocalMappingPointer.argtypes = [c_void_p, c_uint]
+        lib.getLocalMappingPointer.restype  = c_void_p
         lib.startReadingFromVideoBufferPointer.argtypes = [c_void_p]
-        lib.startReadingFromVideoBufferPointer.restype = c_int
-        lib.stopReadingFromVideoBufferPointer.argtypes = [c_void_p]
-        lib.stopReadingFromVideoBufferPointer.restype = c_int
+        lib.startReadingFromVideoBufferPointer.restype  = c_int
+        lib.stopReadingFromVideoBufferPointer.argtypes  = [c_void_p]
+        lib.stopReadingFromVideoBufferPointer.restype  = c_int
+        lib.getSharedMemoryContextNumberOfBuffers.argtypes = [c_void_p]
+        lib.getSharedMemoryContextNumberOfBuffers.restype  = c_int
         lib.printSharedMemoryContextState.argtypes = [c_void_p]
         lib.writeVideoFrameToImage.argtypes = [c_char_p, c_void_p, c_void_p]
         lib.mapRemoteToLocal.argtypes = [c_void_p, c_void_p, c_uint]
+        lib.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
+        lib.getVideoBufferPointer.restype  = ctypes.c_void_p
+
+        lib.getSharedMemoryContextVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_int]
+        lib.getSharedMemoryContextVideoFrame.restype  = ctypes.c_void_p 
+
+        lib.remoteSharedMemoryContextVideoFrameIsPopulated.argtypes = [ctypes.c_void_p,ctypes.c_int]
+        lib.remoteSharedMemoryContextVideoFrameIsPopulated.restype  = ctypes.c_int 
+
         return lib
 
     def allocate_local_mapping(self):
@@ -49,11 +62,23 @@ class SharedMemoryServer:
     def unmap_local_mapping_item(self, index):
         self.lib.unmapLocalMappingItem(self.local_map, index)
 
+    def get_local_mapping_pointer(self, index):
+        self.lib.getLocalMappingPointer(self.local_map, index)
+
     def start_reading_from_video_buffer_pointer(self, frame):
         return self.lib.startReadingFromVideoBufferPointer(frame)
 
     def stop_reading_from_video_buffer_pointer(self, frame):
         return self.lib.stopReadingFromVideoBufferPointer(frame)
+
+    def get_shared_memory_context_number_of_buffers(self):
+        return self.lib.getSharedMemoryContextNumberOfBuffers(self.context)
+
+    def get_shared_memory_context_video_frame(self,index):
+        return self.lib.getSharedMemoryContextVideoFrame(self.context,index)
+
+    def remote_shared_memory_context_video_frame_is_populated(self,index):
+        return self.lib.remoteSharedMemoryContextVideoFrameIsPopulated(self.context,index) 
 
     def print_shared_memory_context_state(self):
         self.lib.printSharedMemoryContextState(self.context)
@@ -68,22 +93,22 @@ class SharedMemoryServer:
         while True:
             input("Press Enter to encode frames...")
 
-            if self.context.contents.numberOfBuffers == 0:
+            if self.get_shared_memory_context_number_of_buffers() == 0:
                 print("Server is empty!")
                 for i in range(self.context.contents.MAX_NUMBER_OF_BUFFERS):
                     self.unmap_local_mapping_item(i)
 
-            for i in range(self.context.contents.numberOfBuffers):
-                frame = ctypes.pointer(self.context.contents.buffer[i])
+            for i in range(self.get_shared_memory_context_number_of_buffers()):
+                frame = self.get_shared_memory_context_video_frame(i)
 
-                if frame.contents.client_address_space_data_pointer:
-                    print(f"Frame {i} - {frame.contents.width}x{frame.contents.height}:{frame.contents.channels} - {frame.contents.name.decode('utf-8')}")
+                if  self.remote_shared_memory_context_video_frame_is_populated(i) :#  frame.contents.client_address_space_data_pointer:
+                    #print(f"Frame {i} - {frame.contents.width}x{frame.contents.height}:{frame.contents.channels} - {frame.contents.name.decode('utf-8')}")
                     filename = self.data_dir / f"server_stream{i}.pnm"
                     self.map_remote_to_local(i)
 
                     if self.start_reading_from_video_buffer_pointer(frame):
                         self.print_shared_memory_context_state()
-                        self.write_video_frame_to_image(str(filename), frame, self.local_map.contents.data[i])
+                        self.write_video_frame_to_image(str(filename), frame, self.get_local_mapping_pointer(i))
                         self.stop_reading_from_video_buffer_pointer(frame)
                     else:
                         print(f"Failed to lock buffer {i} for reading")

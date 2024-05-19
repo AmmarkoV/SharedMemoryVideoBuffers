@@ -54,6 +54,11 @@ struct SharedMemoryContext
 
 int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsigned char * data);
 
+
+int getSharedMemoryContextNumberOfBuffers(struct SharedMemoryContext *context);
+struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext *context, int item);
+int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *context, int item);
+
 void printSharedMemoryContextState(struct SharedMemoryContext *context);
 // Server process functions
 int createSharedMemoryContextDescriptor(const char *path);
