@@ -123,5 +123,6 @@ if __name__ == '__main__':
 
      while not cap.should_stop:
        ret, frame = cap.read()
+       smm.copy_numpy_to_shared_memory(frame)
        cap.visualize()
 
