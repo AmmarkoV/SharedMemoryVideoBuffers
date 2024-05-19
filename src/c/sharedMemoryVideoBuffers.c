@@ -62,7 +62,7 @@ unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 }
 
 
-int WriteVideoFrame(const char * filename,struct VideoFrame * pic, unsigned char * data)
+int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsigned char * data)
 {
     //fprintf(stderr,"saveRawImageToFile(%s) called\n",filename);
     if (pic==0) { return 0; }
@@ -131,6 +131,25 @@ unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int it
   }
   return 0;
 }
+
+
+int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocalMapping * localMap,int item)
+{
+  if (context!=0)
+  {
+   struct VideoFrame *frame = &context->buffer[item];
+   if (localMap->data[item]==0)
+                {
+                  //Only do the local mapping if we haven't already
+                  localMap->data[item] = map_frame_shared_memory(frame,0);
+                  localMap->sz[item]   = frame->frame_size;
+                  return 1;
+                }
+  }
+
+  return 0;
+}
+
 
 int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item)
 {

@@ -1,8 +1,6 @@
 /** @file sharedMemoryVideoBuffers.h
- *  @brief  A header-only thread automization library to make your multithreaded-lives easier.
- *  To add to your project just copy this header to your code and don't forget to link with
- *  pthreads, for example : gcc -O3 -pthread yourProject.c -o threadsExample
- *  Repository : https://github.com/AmmarkoV/PThreadWorkerPool
+ *  @brief  A header-only thread automization library to make processing streams from multiple processes easier.
+ *  Repository : https://github.com/AmmarkoV/SharedMemoryVideoBuffers
  *  @author Ammar Qammaz (AmmarkoV)
  */
 
@@ -54,7 +52,7 @@ struct SharedMemoryContext
 
 
 
-int WriteVideoFrame(const char * filename,struct VideoFrame * pic, unsigned char * data);
+int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsigned char * data);
 
 void printSharedMemoryContextState(struct SharedMemoryContext *context);
 // Server process functions
@@ -73,6 +71,7 @@ int destroyVideoFrame(struct SharedMemoryContext* context,const char * streamNam
 struct VideoFrameLocalMapping * allocateLocalMapping();
 int freeLocalMapping(struct VideoFrameLocalMapping * lm);
 unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int item);
+int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocalMapping * localMap,int item);
 int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item);
 
 void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n);

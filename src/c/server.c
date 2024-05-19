@@ -53,17 +53,12 @@ int main()
 
                 //Dont copy the mmapped memory pointer to the "frame" data because we are the server and
                 //we dont want to overwrite the data of the client
-                if (localMap->data[i]==0)
-                {
-                  //Only do the local mapping if we haven't already
-                  localMap->data[i] = map_frame_shared_memory(frame,0);
-                  localMap->sz[i]   = frame->frame_size;
-                }
+                mapRemoteToLocal(context,localMap,i);
 
                 if (startReadingFromVideoBufferPointer(frame))
                 {
                     printSharedMemoryContextState(context);
-                    WriteVideoFrame(filename, frame, localMap->data[i]);
+                    writeVideoFrameToImage(filename, frame, localMap->data[i]);
                     stopReadingFromVideoBufferPointer(frame);
                 }
                 else
