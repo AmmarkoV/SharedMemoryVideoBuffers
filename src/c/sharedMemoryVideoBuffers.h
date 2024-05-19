@@ -55,6 +55,7 @@ struct SharedMemoryContext
 int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsigned char * data);
 
 
+int getSharedMemoryContextMAXBuffers();
 int getSharedMemoryContextNumberOfBuffers(struct SharedMemoryContext *context);
 struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext *context, int item);
 int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *context, int item);

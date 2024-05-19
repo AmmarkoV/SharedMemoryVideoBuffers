@@ -5,9 +5,9 @@ from pathlib import Path
 
 class SharedMemoryServer:
     def __init__(self, shm_name="video_frames.shm", data_dir="data"):
-        self.lib = self.load_library()
-        self.shm_name = shm_name.encode('utf-8')
-        self.data_dir = Path(data_dir)
+        self.lib       = self.load_library()
+        self.shm_name  = shm_name.encode('utf-8')
+        self.data_dir  = Path(data_dir)
         self.local_map = self.allocate_local_mapping()
 
         if self.create_shared_memory_context_descriptor(self.shm_name) == -1:
@@ -18,7 +18,7 @@ class SharedMemoryServer:
             raise RuntimeError("Failed to connect to shared memory context descriptor")
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        print("Server is ready. Press Enter to encode frames.")
+        print("Server is ready.")
 
     def load_library(self):
         lib = ctypes.CDLL("./libSharedMemoryVideoBuffers.so", mode=ctypes.RTLD_GLOBAL)
@@ -41,6 +41,9 @@ class SharedMemoryServer:
         lib.mapRemoteToLocal.argtypes = [c_void_p, c_void_p, c_uint]
         lib.getVideoBufferPointer.argtypes = [c_void_p,ctypes.c_char_p]
         lib.getVideoBufferPointer.restype  = c_void_p
+
+        lib.getSharedMemoryContextMAXBuffers.argtypes = [ ]
+        lib.getSharedMemoryContextMAXBuffers.restype  = c_int
 
         lib.getSharedMemoryContextVideoFrame.argtypes = [c_void_p,c_int]
         lib.getSharedMemoryContextVideoFrame.restype  = c_void_p 
@@ -71,6 +74,9 @@ class SharedMemoryServer:
     def stop_reading_from_video_buffer_pointer(self, frame):
         return self.lib.stopReadingFromVideoBufferPointer(frame)
 
+    def get_shared_memory_context_max_buffers(self):
+        return self.lib.getSharedMemoryContextMAXBuffers()
+
     def get_shared_memory_context_number_of_buffers(self):
         return self.lib.getSharedMemoryContextNumberOfBuffers(self.context)
 
@@ -84,7 +90,8 @@ class SharedMemoryServer:
         self.lib.printSharedMemoryContextState(self.context)
 
     def write_video_frame_to_image(self, filename, frame, data):
-        self.lib.writeVideoFrameToImage(filename.encode('utf-8'), frame, data)
+        path = filename.encode('utf-8')   
+        self.lib.writeVideoFrameToImage(path, frame, data)
 
     def map_remote_to_local(self, index):
         self.lib.mapRemoteToLocal(self.context, self.local_map, index)
@@ -95,13 +102,13 @@ class SharedMemoryServer:
 
             if self.get_shared_memory_context_number_of_buffers() == 0:
                 print("Server is empty!")
-                for i in range(self.context.contents.MAX_NUMBER_OF_BUFFERS):
+                for i in range(self.get_shared_memory_context_max_buffers()):
                     self.unmap_local_mapping_item(i)
 
             for i in range(self.get_shared_memory_context_number_of_buffers()):
                 frame = self.get_shared_memory_context_video_frame(i)
 
-                if  self.remote_shared_memory_context_video_frame_is_populated(i):
+                if (self.remote_shared_memory_context_video_frame_is_populated(i)!=0):
                     #print(f"Frame {i} - {frame.contents.width}x{frame.contents.height}:{frame.contents.channels} - {frame.contents.name.decode('utf-8')}")
                     filename = self.data_dir / f"server_stream{i}.pnm"
                     self.map_remote_to_local(i)

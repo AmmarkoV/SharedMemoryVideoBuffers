@@ -182,6 +182,12 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
 }
 
 
+
+int getSharedMemoryContextMAXBuffers()
+{
+  return MAX_NUMBER_OF_BUFFERS;
+}
+
 int getSharedMemoryContextNumberOfBuffers(struct SharedMemoryContext *context)
 {
   if (context!=0)

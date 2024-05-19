@@ -44,7 +44,8 @@ int main()
 
         for (unsigned int i = 0; i < getSharedMemoryContextNumberOfBuffers(context); i++)
         {
-            struct VideoFrame *frame = &context->buffer[i];
+            //struct VideoFrame *frame = &context->buffer[i];
+            struct VideoFrame * frame = getSharedMemoryContextVideoFrame(context,i);
 
             if (remoteSharedMemoryContextVideoFrameIsPopulated(context,i) != 0) //If the client has a memory address we are good to go
             {
