@@ -76,7 +76,7 @@ class SharedMemoryManager:
         res = self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer(self.frame)
 
         # Check if the array size matches the shared memory size
-        if res != 0:
+        if res == 0:
             raise RuntimeError("Failed to lock video buffer for writing")
 
         # Copy the array data to shared memory
@@ -96,7 +96,7 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.restype  = ctypes.c_int
         res = self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer(self.frame)
 
-        if res != 0:
+        if res == 0:
             raise RuntimeError("Failed to unlock video buffer after writing")
 
 # Test

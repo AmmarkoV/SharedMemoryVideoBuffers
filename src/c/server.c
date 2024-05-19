@@ -9,6 +9,8 @@ int main()
 {
     struct VideoFrameLocalMapping * localMap = allocateLocalMapping();
     const char *shm_name = "video_frames.shm";
+    char filename[256]={0};
+
 
     //Server creates and zeroes out all existing data..
     if (createSharedMemoryContextDescriptor(shm_name) == -1)
@@ -32,12 +34,11 @@ int main()
         if (context->numberOfBuffers==0)
         {
           fprintf(stderr,"Server is empty!\n");
+
+          //Make sure everything is unmapped if server is empty
           for (unsigned int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
           {
-              if (localMap->data[i]!=0)
-                {
-                  unmapLocalMappingItem(localMap,i);
-                }
+             unmapLocalMappingItem(localMap,i);
           }
         }
 
@@ -47,21 +48,19 @@ int main()
 
             if (frame->client_address_space_data_pointer != NULL) //If the client has a memory address we are good to go
             {
-                fprintf(stderr,"Frame %u - %ux%u:%u - ",i,frame->width,frame->height,frame->channels);
-                fprintf(stderr,"%s\n",frame->name);
-
-                char filename[256]={0};
+                fprintf(stderr,"Frame %u - %ux%u:%u - %s\n",i,frame->width,frame->height,frame->channels,frame->name);
                 snprintf(filename, sizeof(filename), "data/server_stream%u.pnm", i);
 
                 //Dont copy the mmapped memory pointer to the "frame" data because we are the server and
                 //we dont want to overwrite the data of the client
                 if (localMap->data[i]==0)
-                {//Only do the local mapping if we haven't already
+                {
+                  //Only do the local mapping if we haven't already
                   localMap->data[i] = map_frame_shared_memory(frame,0);
                   localMap->sz[i]   = frame->frame_size;
                 }
 
-                if (startReadingFromVideoBufferPointer(frame) == 0)
+                if (startReadingFromVideoBufferPointer(frame))
                 {
                     printSharedMemoryContextState(context);
                     WriteVideoFrame(filename, frame, localMap->data[i]);
@@ -74,10 +73,7 @@ int main()
             } //client has an allocated data pointer
             else
             {
-                if (localMap->data[i]!=0)
-                { //Lets deallocate our local pointer..
-                  unmapLocalMappingItem(localMap,i);
-                }
+              unmapLocalMappingItem(localMap,i);
             }
         } //we scan each of the available buffers
     } //server always on

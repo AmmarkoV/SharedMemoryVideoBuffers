@@ -56,7 +56,7 @@ int main()
     printSharedMemoryContextState(context);
     fprintf(stderr,"Write %lu bytes of dummy data\n",frame->frame_size);
     // Example to write to buffer (Client)
-    if (startWritingToVideoBufferPointer(frame) == 0)
+    if (startWritingToVideoBufferPointer(frame))
     {
         unsigned char *data = (unsigned char*)malloc(frame->frame_size);
         for (size_t i = 0; i < frame->frame_size; i++)
@@ -74,7 +74,7 @@ int main()
 
     fprintf(stderr,"Read %lu bytes of dummy data\n",frame->frame_size);
     // Example to read from buffer (Client)
-    if (startReadingFromVideoBufferPointer(frame) == 0)
+    if (startReadingFromVideoBufferPointer(frame))
     {
         unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
         if (buffer!=0)

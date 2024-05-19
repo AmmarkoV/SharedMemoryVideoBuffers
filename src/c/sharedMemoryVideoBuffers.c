@@ -426,46 +426,46 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
 // Start writing to a video buffer
 int startWritingToVideoBufferPointer(struct VideoFrame *vf)
 {
-    if (vf==0) {return -1; }
+    if (vf==0) { return 0; }
 
     fprintf(stderr,"startWritingToVideoBufferPointer :");
     if (__sync_lock_test_and_set(&vf->locked, 1))
     {
         fprintf(stderr,RED "failed\n" NORMAL);
-        return -1; // Buffer is already locked
+        return 0; // Buffer is already locked
     }
     fprintf(stderr,GREEN "success\n" NORMAL);
-    return 0;
+    return 1;
 }
 
 // Stop writing to a video buffer
 int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
 {
-    if (vf==0) {return -1; }
+    if (vf==0) { return 0; }
     fprintf(stderr,"stopWritingToVideoBufferPointer :");
     __sync_lock_release(&vf->locked);
     fprintf(stderr,GREEN "success\n" NORMAL);
-    return 0;
+    return 1;
 }
 
 // Start reading from a video buffer
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
-    if (vf==0) {return -1; }
+    if (vf==0) { return 0; }
     fprintf(stderr,"startReadingFromVideoBufferPointer :");
     if (__sync_fetch_and_add(&vf->locked, 0))
     {
         fprintf(stderr,RED "failed\n" NORMAL);
-        return -1; // Buffer is locked
+        return 0; // Buffer is locked
     }
     fprintf(stderr,GREEN "success\n" NORMAL);
-    return 0;
+    return 1;
 }
 
 // Stop reading from a video buffer
 int stopReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
-    if (vf==0) {return -1; }
+    if (vf==0) { return 0; }
     // No-op for readers
-    return 0;
+    return 1;
 }
