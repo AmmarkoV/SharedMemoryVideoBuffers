@@ -344,6 +344,12 @@ int destroyVideoFrame(struct SharedMemoryContext* context, const char *streamNam
 
     context->numberOfBuffers--;
     fprintf(stderr, "Stream %s destroyed\n", streamName);
+
+    fprintf(stderr, "Final cleanup of %s\n",streamName);
+    memset(frame,0,sizeof(struct VideoFrame));
+    fprintf(stderr, "Done with %s\n",streamName);
+
+
     return EXIT_SUCCESS;
 }
 

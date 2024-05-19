@@ -27,6 +27,12 @@ int main()
     while (1)
     {
         getchar();  // Wait for Enter key
+
+        if (context->numberOfBuffers==0)
+        {
+          fprintf(stderr,"Server is empty!\n");
+        }
+
         for (unsigned int i = 0; i < context->numberOfBuffers; i++)
         {
             struct VideoFrame *frame = &context->buffer[i];

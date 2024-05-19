@@ -29,7 +29,8 @@ def loadLibrary(filename, relativePath="", forceUpdate=False):
 class SharedMemoryManager:
     def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", width=640, height=480, channels=3, forceLibUpdate=False):
         # Create a shared memory segment
-        
+        self.frameName = frameName
+
         print("Loading libSharedMemoryVideoBuffers")
         self.libSharedMemoryVideoBuffers = loadLibrary(libraryPath, forceUpdate=forceLibUpdate)
 
@@ -59,6 +60,13 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = ctypes.c_int
         res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
 
+
+    def __del__(self):
+        print('Destructor called, unloading libSharedMemoryVideoBuffers')
+        self.libSharedMemoryVideoBuffers.destroyVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
+        self.libSharedMemoryVideoBuffers.destroyVideoFrame.restype  = ctypes.c_void_p
+        path = self.frameName.encode('utf-8')  
+        self.frame = self.libSharedMemoryVideoBuffers.destroyVideoFrame(self.smc,path) 
 
     def copy_numpy_to_shared_memory(self, array):
         print("copy_numpy_to_shared_memory ")
