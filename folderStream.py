@@ -5,6 +5,7 @@ import os
 import sys
 import cv2
 
+from SharedMemoryManager import SharedMemoryManager
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
@@ -115,4 +116,28 @@ class FolderStreamer():
                 cv2.destroyAllWindows()
                 self.should_stop = True
                 #break
+
+
+if __name__ == '__main__':
+     streamName = "stream3"
+     source ="./"
+     if (len(sys.argv)>1):
+         source = sys.argv[1] 
+     if (len(sys.argv)>2):
+         streamName = sys.argv[2] 
+
+     cap = FolderStreamer(path = source,width = 800,height = 600)
+
+     ret, frame = cap.read()
+     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
+                               descriptor = "video_frames.shm", 
+                               frameName  = streamName, 
+                               width      = frame.shape[1],
+                               height     = frame.shape[0],
+                               channels   = frame.shape[2])
+
+     while not cap.should_stop:
+       ret, frame = cap.read()
+       cap.visualize()
+
 

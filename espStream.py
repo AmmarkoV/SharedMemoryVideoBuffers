@@ -11,6 +11,8 @@ import sys
 #import tarfile
 #import zipfile
 import cv2
+from SharedMemoryManager import SharedMemoryManager
+
  
 # Helper code
 def load_image_into_numpy_array(image):
@@ -102,11 +104,24 @@ class ESP32CamStreamer():
                 #break
 
 if __name__ == '__main__':
+     streamName = "stream2"
      source ="http://192.168.1.119:80"
      if (len(sys.argv)>1):
          source = "http://%s:80" % sys.argv[1] 
+     if (len(sys.argv)>2):
+         streamName = sys.argv[2] 
+
      cap = ESP32CamStreamer(url = source)
-     while True:
-       cap.read()
+
+     ret, frame = cap.read()
+     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
+                               descriptor = "video_frames.shm", 
+                               frameName  = streamName, 
+                               width      = frame.shape[1],
+                               height     = frame.shape[0],
+                               channels   = frame.shape[2])
+
+     while not cap.should_stop:
+       ret, frame = cap.read()
        cap.visualize()
 
