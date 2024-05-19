@@ -22,7 +22,7 @@ class SharedMemoryServer:
 
     def load_library(self):
         lib = ctypes.CDLL("./libSharedMemoryVideoBuffers.so", mode=ctypes.RTLD_GLOBAL)
-        lib.allocateLocalMapping.restype = ctypes.POINTER(ctypes.c_void_p)
+        lib.allocateLocalMapping.restype = ctypes.POINTER(c_void_p)
         lib.createSharedMemoryContextDescriptor.argtypes = [c_char_p]
         lib.createSharedMemoryContextDescriptor.restype  = c_int
         lib.connectToSharedMemoryContextDescriptor.argtypes = [c_char_p]
@@ -39,14 +39,14 @@ class SharedMemoryServer:
         lib.printSharedMemoryContextState.argtypes = [c_void_p]
         lib.writeVideoFrameToImage.argtypes = [c_char_p, c_void_p, c_void_p]
         lib.mapRemoteToLocal.argtypes = [c_void_p, c_void_p, c_uint]
-        lib.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
-        lib.getVideoBufferPointer.restype  = ctypes.c_void_p
+        lib.getVideoBufferPointer.argtypes = [c_void_p,ctypes.c_char_p]
+        lib.getVideoBufferPointer.restype  = c_void_p
 
-        lib.getSharedMemoryContextVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_int]
-        lib.getSharedMemoryContextVideoFrame.restype  = ctypes.c_void_p 
+        lib.getSharedMemoryContextVideoFrame.argtypes = [c_void_p,c_int]
+        lib.getSharedMemoryContextVideoFrame.restype  = c_void_p 
 
-        lib.remoteSharedMemoryContextVideoFrameIsPopulated.argtypes = [ctypes.c_void_p,ctypes.c_int]
-        lib.remoteSharedMemoryContextVideoFrameIsPopulated.restype  = ctypes.c_int 
+        lib.remoteSharedMemoryContextVideoFrameIsPopulated.argtypes = [c_void_p, c_int]
+        lib.remoteSharedMemoryContextVideoFrameIsPopulated.restype  = c_int 
 
         return lib
 
@@ -63,7 +63,7 @@ class SharedMemoryServer:
         self.lib.unmapLocalMappingItem(self.local_map, index)
 
     def get_local_mapping_pointer(self, index):
-        self.lib.getLocalMappingPointer(self.local_map, index)
+        return self.lib.getLocalMappingPointer(self.local_map, index)
 
     def start_reading_from_video_buffer_pointer(self, frame):
         return self.lib.startReadingFromVideoBufferPointer(frame)
@@ -101,7 +101,7 @@ class SharedMemoryServer:
             for i in range(self.get_shared_memory_context_number_of_buffers()):
                 frame = self.get_shared_memory_context_video_frame(i)
 
-                if  self.remote_shared_memory_context_video_frame_is_populated(i) :#  frame.contents.client_address_space_data_pointer:
+                if  self.remote_shared_memory_context_video_frame_is_populated(i):
                     #print(f"Frame {i} - {frame.contents.width}x{frame.contents.height}:{frame.contents.channels} - {frame.contents.name.decode('utf-8')}")
                     filename = self.data_dir / f"server_stream{i}.pnm"
                     self.map_remote_to_local(i)
