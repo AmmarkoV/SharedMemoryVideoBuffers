@@ -22,6 +22,7 @@ int main()
         return EXIT_FAILURE;
     }
 
+    system("mkdir data/");
     printf("Server is ready. Press Enter to encode frames.\n");
 
     while (1)
@@ -43,7 +44,7 @@ int main()
                 fprintf(stderr,"%s\n",frame->name);
 
                 char filename[256];
-                snprintf(filename, sizeof(filename), "server_stream%u.pnm", i);
+                snprintf(filename, sizeof(filename), "data/server_stream%u.pnm", i);
 
                 //Dont copy the mmapped memory pointer to the "frame" data because we are the server and we dont want to overwrite the data of the client
                 localMap.data[i] = map_frame_shared_memory(frame,0);
