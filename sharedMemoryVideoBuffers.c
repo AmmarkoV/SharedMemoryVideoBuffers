@@ -109,12 +109,12 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
 {
   if ( (frame!=0) && (src!=0) && (n!=0) )
     {
-        if (frame->data!=0)
+        if (frame->client_address_space_data_pointer!=0)
         {
            if (frame->frame_size >= n)
            {
-             fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,frame->data);
-             memcpy(frame->data,src, n);
+             fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,frame->client_address_space_data_pointer);
+             memcpy(frame->client_address_space_data_pointer,src, n);
            }
         }
     }
@@ -126,7 +126,7 @@ void printSharedMemoryContextState(struct SharedMemoryContext *context)
   fprintf(stderr,"Populated Streams : %u\n",context->numberOfBuffers);
   for (int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
      {
-         fprintf(stderr,"Bank %u : %ux%u:%u @ %p\n",i,context->buffer[i].width,context->buffer[i].height,context->buffer[i].channels,context->buffer[i].data);
+         fprintf(stderr,"Bank %u : %ux%u:%u @ %p\n",i,context->buffer[i].width,context->buffer[i].height,context->buffer[i].channels,context->buffer[i].client_address_space_data_pointer);
      }
 }
 
@@ -193,9 +193,9 @@ int create_frame_shared_memory(struct VideoFrame *frame)
     }
 
     fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,frame->frame_size);
-    frame->data = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    fprintf(stderr,"MMAP pointer for %s @ %p\n",frame->name,frame->data);
-    if (frame->data == MAP_FAILED)
+    frame->client_address_space_data_pointer = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    fprintf(stderr,"MMAP pointer for %s @ %p\n",frame->name,frame->client_address_space_data_pointer);
+    if (frame->client_address_space_data_pointer == MAP_FAILED)
     {
         fprintf(stderr,RED "mmap frame\n" NORMAL);
         perror("mmap frame");
@@ -234,7 +234,7 @@ unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideo
 
     if (copyToVideoFramePointer)
     {
-        frame->data = result;
+        frame->client_address_space_data_pointer = result;
     }
 
     fprintf(stderr,"MMAP shared memory now points at %p\n",result);
@@ -318,15 +318,15 @@ int destroyVideoFrame(struct SharedMemoryContext* context, const char *streamNam
 
     struct VideoFrame *frame = &context->buffer[index];
 
-    if (frame->data != NULL)
+    if (frame->client_address_space_data_pointer != NULL)
     {
         // Unmap the shared memory
-        if (munmap(frame->data, frame->frame_size) == -1)
+        if (munmap(frame->client_address_space_data_pointer, frame->frame_size) == -1)
         {
             perror("munmap frame");
             return EXIT_FAILURE;
         }
-        frame->data = NULL;
+        frame->client_address_space_data_pointer = NULL;
     }
 
     // Remove the shared memory object

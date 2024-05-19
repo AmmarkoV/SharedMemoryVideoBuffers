@@ -35,10 +35,10 @@ struct VideoFrame
     unsigned int channels;
     size_t frame_size;
     //-----------------------------------------------------------------------------------------------------------
-    unsigned char *data; //<- BE VERY CAREFUL THIS POINTS TO THE CLIENT DATA, and is an invalid pointer for other processes
+    unsigned char *client_address_space_data_pointer; //<- BE VERY CAREFUL THIS POINTS TO THE CLIENT DATA, and is an invalid pointer for other processes
 };
 
-// Define a structure to hold video frame metadata
+// Define a structure to hold the local video frame pointers
 struct VideoFrameLocalMapping
 {
     unsigned char *data[MAX_NUMBER_OF_BUFFERS];

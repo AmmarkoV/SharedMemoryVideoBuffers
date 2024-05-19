@@ -37,7 +37,7 @@ int main()
         {
             struct VideoFrame *frame = &context->buffer[i];
 
-            if (frame->data != NULL)
+            if (frame->client_address_space_data_pointer != NULL) //If the client has a memory address we are good to go
             {
                 fprintf(stderr,"Frame %u - %ux%u:%u - ",i,frame->width,frame->height,frame->channels);
                 fprintf(stderr,"%s\n",frame->name);
