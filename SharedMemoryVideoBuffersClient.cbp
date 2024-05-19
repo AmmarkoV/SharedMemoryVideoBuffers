@@ -31,13 +31,13 @@
 		<Compiler>
 			<Add option="-Wall" />
 		</Compiler>
-		<Unit filename="client.c">
+		<Unit filename="src/c/client.c">
 			<Option compilerVar="CC" />
 		</Unit>
-		<Unit filename="sharedMemoryVideoBuffers.c">
+		<Unit filename="src/c/sharedMemoryVideoBuffers.c">
 			<Option compilerVar="CC" />
 		</Unit>
-		<Unit filename="sharedMemoryVideoBuffers.h" />
+		<Unit filename="src/c/sharedMemoryVideoBuffers.h" />
 		<Extensions />
 	</Project>
 </CodeBlocks_project_file>

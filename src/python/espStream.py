@@ -123,6 +123,8 @@ if __name__ == '__main__':
 
      while not cap.should_stop:
        ret, frame = cap.read()
+
+       frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
        smm.copy_numpy_to_shared_memory(frame)
        cap.visualize()
 
