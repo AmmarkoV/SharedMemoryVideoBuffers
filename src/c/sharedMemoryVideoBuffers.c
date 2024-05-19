@@ -104,6 +104,21 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic, unsigned char
     return 0;
 }
 
+
+int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item)
+{
+   if ( (localmap->data[item]!=0) && (localmap->sz[item]!=0) )
+   {
+    fprintf(stderr,"Unmapping memory for item %u\n",item);
+    munmap(localmap->data[item],localmap->sz[item]);
+    localmap->sz[item]   = 0;
+    localmap->data[item] = 0;
+    return 1;
+   }
+ return 0;
+}
+
+
 // Function to copy data from a buffer to the shared memory buffer
 void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
 {

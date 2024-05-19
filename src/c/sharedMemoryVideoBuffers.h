@@ -42,6 +42,7 @@ struct VideoFrame
 struct VideoFrameLocalMapping
 {
     unsigned char *data[MAX_NUMBER_OF_BUFFERS];
+    size_t         sz[MAX_NUMBER_OF_BUFFERS];
 };
 
 
@@ -67,6 +68,9 @@ int create_frame_shared_memory(struct VideoFrame *frame);
 
 int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels);
 int destroyVideoFrame(struct SharedMemoryContext* context,const char * streamName);
+
+
+int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item);
 
 void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n);
 

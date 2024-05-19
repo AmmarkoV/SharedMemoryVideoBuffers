@@ -22,7 +22,7 @@ int main()
         return EXIT_FAILURE;
     }
 
-    system("mkdir data/");
+    system("mkdir -p data/");
     printf("Server is ready. Press Enter to encode frames.\n");
 
     while (1)
@@ -32,6 +32,13 @@ int main()
         if (context->numberOfBuffers==0)
         {
           fprintf(stderr,"Server is empty!\n");
+          for (unsigned int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
+          {
+              if (localMap.data[i]!=0)
+                {
+                  unmapLocalMappingItem(&localMap,i);
+                }
+          }
         }
 
         for (unsigned int i = 0; i < context->numberOfBuffers; i++)
@@ -43,11 +50,17 @@ int main()
                 fprintf(stderr,"Frame %u - %ux%u:%u - ",i,frame->width,frame->height,frame->channels);
                 fprintf(stderr,"%s\n",frame->name);
 
-                char filename[256];
+                char filename[256]={0};
                 snprintf(filename, sizeof(filename), "data/server_stream%u.pnm", i);
 
-                //Dont copy the mmapped memory pointer to the "frame" data because we are the server and we dont want to overwrite the data of the client
-                localMap.data[i] = map_frame_shared_memory(frame,0);
+                //Dont copy the mmapped memory pointer to the "frame" data because we are the server and
+                //we dont want to overwrite the data of the client
+                if (localMap.data[i]==0)
+                {//Only do the local mapping if we haven't already
+                  localMap.data[i] = map_frame_shared_memory(frame,0);
+                  localMap.sz[i]   = frame->frame_size;
+                }
+
                 if (startReadingFromVideoBufferPointer(frame) == 0)
                 {
                     printSharedMemoryContextState(context);
@@ -58,11 +71,16 @@ int main()
                 {
                     fprintf(stderr, "Failed to lock buffer %u for reading\n", i);
                 }
-
+            } //client has an allocated data pointer
+            else
+            {
+                if (localMap.data[i]!=0)
+                { //Lets deallocate our local pointer..
+                  unmapLocalMappingItem(&localMap,i);
+                }
             }
-
-        }
-    }
+        } //we scan each of the available buffers
+    } //server always on
 
     return EXIT_SUCCESS;
 }
