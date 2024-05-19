@@ -7,7 +7,7 @@
 
 int main()
 {
-    struct VideoFrameLocalMapping localMap={0};
+    struct VideoFrameLocalMapping * localMap = allocateLocalMapping();
     const char *shm_name = "video_frames.shm";
 
     //Server creates and zeroes out all existing data..
@@ -34,9 +34,9 @@ int main()
           fprintf(stderr,"Server is empty!\n");
           for (unsigned int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
           {
-              if (localMap.data[i]!=0)
+              if (localMap->data[i]!=0)
                 {
-                  unmapLocalMappingItem(&localMap,i);
+                  unmapLocalMappingItem(localMap,i);
                 }
           }
         }
@@ -55,16 +55,16 @@ int main()
 
                 //Dont copy the mmapped memory pointer to the "frame" data because we are the server and
                 //we dont want to overwrite the data of the client
-                if (localMap.data[i]==0)
+                if (localMap->data[i]==0)
                 {//Only do the local mapping if we haven't already
-                  localMap.data[i] = map_frame_shared_memory(frame,0);
-                  localMap.sz[i]   = frame->frame_size;
+                  localMap->data[i] = map_frame_shared_memory(frame,0);
+                  localMap->sz[i]   = frame->frame_size;
                 }
 
                 if (startReadingFromVideoBufferPointer(frame) == 0)
                 {
                     printSharedMemoryContextState(context);
-                    WriteVideoFrame(filename, frame, localMap.data[i]);
+                    WriteVideoFrame(filename, frame, localMap->data[i]);
                     stopReadingFromVideoBufferPointer(frame);
                 }
                 else
@@ -74,9 +74,9 @@ int main()
             } //client has an allocated data pointer
             else
             {
-                if (localMap.data[i]!=0)
+                if (localMap->data[i]!=0)
                 { //Lets deallocate our local pointer..
-                  unmapLocalMappingItem(&localMap,i);
+                  unmapLocalMappingItem(localMap,i);
                 }
             }
         } //we scan each of the available buffers

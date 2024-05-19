@@ -70,6 +70,9 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
 int destroyVideoFrame(struct SharedMemoryContext* context,const char * streamName);
 
 
+struct VideoFrameLocalMapping * allocateLocalMapping();
+int freeLocalMapping(struct VideoFrameLocalMapping * lm);
+unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int item);
 int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item);
 
 void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n);

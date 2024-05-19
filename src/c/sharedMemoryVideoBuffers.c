@@ -69,7 +69,6 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic, unsigned char
 
     if(data==0) { fprintf(stderr,"saveRawImageToFile(%s) called for an unallocated (empty) frame , will not write any file output\n",filename); return 0; }
 
-
     FILE *fd=0;
     fd = fopen(filename,"wb");
 
@@ -104,6 +103,34 @@ int WriteVideoFrame(const char * filename,struct VideoFrame * pic, unsigned char
     return 0;
 }
 
+
+
+struct VideoFrameLocalMapping * allocateLocalMapping()
+{
+    struct VideoFrameLocalMapping * lm = 0;
+    lm =(struct VideoFrameLocalMapping *) malloc(sizeof(struct VideoFrameLocalMapping));
+    return lm;
+}
+
+
+int freeLocalMapping(struct VideoFrameLocalMapping * lm)
+{
+  if (lm!=0)
+  {
+      free(lm);
+      return 1;
+  }
+  return 0;
+}
+
+unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int item)
+{
+  if (lm!=0)
+  {
+      return lm->data[item];
+  }
+  return 0;
+}
 
 int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item)
 {
