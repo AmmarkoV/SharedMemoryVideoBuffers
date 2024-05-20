@@ -65,7 +65,8 @@ unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsigned char * data)
 {
     //fprintf(stderr,"saveRawImageToFile(%s) called\n",filename);
-    if (pic==0) { return 0; }
+    if (pic==0)      { return 0; }
+    if (filename==0) { return 0; }
 
     if(data==0) { fprintf(stderr,"saveRawImageToFile(%s) called for an unallocated (empty) frame , will not write any file output\n",filename); return 0; }
 
