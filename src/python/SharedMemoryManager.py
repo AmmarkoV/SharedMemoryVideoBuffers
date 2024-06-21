@@ -98,6 +98,12 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.getVideoFrameHeight.restype    = ctypes.c_uint
         self.libSharedMemoryVideoBuffers.getVideoFrameChannels.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.getVideoFrameChannels.restype  = ctypes.c_uint
+
+        self.width    = width
+        self.height   = height
+        self.channels = channels
+        self.frame_size = width * height * channels
+
         print("Ready ")
 
 
@@ -144,16 +150,20 @@ class SharedMemoryManager:
         if res == 0:
             raise RuntimeError("Failed to lock video buffer for reading")
 
-        frame_size = self.libSharedMemoryVideoBuffers.getVideoFrameDataSize(self.frame)
-        pixels     = self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer(self.frame)
-
-        self.outWidth    = self.libSharedMemoryVideoBuffers.getVideoFrameWidth(self.frame)
-        self.outHeight   = self.libSharedMemoryVideoBuffers.getVideoFrameHeight(self.frame)
-        self.outChannels = self.libSharedMemoryVideoBuffers.getVideoFrameChannels(self.frame)
-        print("Reading %ux%u:%u (size %lu) frame at %lu"% (self.outWidth,self.outHeight,self.outChannels,frame_size,pixels))
+        self.frame_size = self.libSharedMemoryVideoBuffers.getVideoFrameDataSize(self.frame)
+        pixels          = self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer(self.frame)
+        #TODO error check here
+        self.width      = self.libSharedMemoryVideoBuffers.getVideoFrameWidth(self.frame)
+        self.height     = self.libSharedMemoryVideoBuffers.getVideoFrameHeight(self.frame)
+        self.channels   = self.libSharedMemoryVideoBuffers.getVideoFrameChannels(self.frame)
+        print("Reading %ux%u:%u (size %lu) frame at %lu"% (self.width,self.height,self.channels,self.frame_size,pixels))
 
         # Convert buffer to numpy array 
-        array = np.ctypeslib.as_array(pixels, shape=(self.outHeight, self.outWidth,  self.outChannels)).astype(np.uint8)
+        #array = np.ctypeslib.as_array(pixels, shape=(self.outHeight, self.width,  self.channels)).astype(np.uint8)
+
+        # Convert buffer to numpy array 
+        buffer = (ctypes.c_ubyte * self.frame_size).from_address(pixels)
+        array = np.ctypeslib.as_array(buffer).reshape((self.height, self.width, self.channels)).astype(np.uint8)
 
 
         # Unlock Video Buffer after reading

@@ -6,10 +6,7 @@ def main(streamName):
     
     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
                               descriptor = "video_frames.shm", 
-                              frameName  = streamName, 
-                              width      = frame.shape[1],
-                              height     = frame.shape[0],
-                              channels   = frame.shape[2])
+                              frameName  = streamName)
 
     # Loop to continuously read frames 
     while True:
@@ -17,8 +14,8 @@ def main(streamName):
         frame = smm.read_from_shared_memory()
         
         # Check if the frame is captured successfully
-        if not ret:
-            print("Error: Couldn't read frame from webcam")
+        if smm.frame_size==0:
+            print("Error: Couldn't read frame from SHM")
             break
         
         # Display the frame in a window
