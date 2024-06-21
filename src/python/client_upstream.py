@@ -50,7 +50,8 @@ if __name__ == "__main__":
     streamName = "stream1"
     if len(sys.argv) != 2 :
         print("\n\nYou did not supply a stream name, assuming ",streamName) 
+    else:
+        streamName = sys.argv[1]
 
-    streamName = sys.argv[1]
     main(streamName)
 
