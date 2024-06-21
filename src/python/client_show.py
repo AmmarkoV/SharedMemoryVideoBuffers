@@ -3,15 +3,7 @@ import numpy as np
 from SharedMemoryManager import SharedMemoryManager
 
 def main(streamName):
-    # Open the first webcam connected to the computer
-    cap = cv2.VideoCapture(0)
     
-    # Check if the webcam is opened successfully
-    if not cap.isOpened():
-        print("Error: Couldn't open webcam")
-        return
-    
-    ret, frame = cap.read()
     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
                               descriptor = "video_frames.shm", 
                               frameName  = streamName, 
@@ -19,7 +11,7 @@ def main(streamName):
                               height     = frame.shape[0],
                               channels   = frame.shape[2])
 
-    # Loop to continuously read frames from the webcam
+    # Loop to continuously read frames 
     while True:
         # Capture frame-by-frame
         frame = smm.read_from_shared_memory()
@@ -30,7 +22,7 @@ def main(streamName):
             break
         
         # Display the frame in a window
-        cv2.imshow('Webcam', frame)
+        cv2.imshow('SharedMemoryVideoBuffer', frame)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Break the loop if 'q' is pressed
@@ -46,7 +38,8 @@ if __name__ == "__main__":
     streamName = "stream1"
     if len(sys.argv) != 2 :
         print("\n\nYou did not supply a stream name, assuming ",streamName) 
+    else:
+        streamName = sys.argv[1]
 
-    streamName = sys.argv[1]
     main(streamName)
 

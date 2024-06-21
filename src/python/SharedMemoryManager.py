@@ -1,6 +1,19 @@
 import ctypes
+import numpy as np
+#-------------------------------------------------------------------------------
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+#-------------------------------------------------------------------------------
 
 from ctypes import *
+
 # Load C library
 def loadLibrary(filename, relativePath="", forceUpdate=False):
     from os.path import exists
@@ -63,8 +76,30 @@ class SharedMemoryManager:
         #Common C functions used in member python functions
         self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.restype  = ctypes.c_int
+
         self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.restype  = ctypes.c_int
+
+        self.libSharedMemoryVideoBuffers.startReadingFromVideoBufferPointer.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.startReadingFromVideoBufferPointer.restype  = ctypes.c_int
+
+        self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer.restype  = ctypes.c_int
+
+        self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.restype  = ctypes.c_void_p
+
+        self.libSharedMemoryVideoBuffers.getVideoFrameDataSize.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.getVideoFrameDataSize.restype  = ctypes.c_ulong
+
+        self.libSharedMemoryVideoBuffers.getVideoFrameWidth.argtypes    = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.getVideoFrameWidth.restype     = ctypes.c_uint
+        self.libSharedMemoryVideoBuffers.getVideoFrameHeight.argtypes   = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.getVideoFrameHeight.restype    = ctypes.c_uint
+        self.libSharedMemoryVideoBuffers.getVideoFrameChannels.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.getVideoFrameChannels.restype  = ctypes.c_uint
+        print("Ready ")
+
 
     def __del__(self):
         print('Destructor called, unloading libSharedMemoryVideoBuffers')
@@ -109,16 +144,21 @@ class SharedMemoryManager:
         if res == 0:
             raise RuntimeError("Failed to lock video buffer for reading")
 
-        frame_size = self.libSharedMemoryVideoBuffers.getFrameSize(self.frame)  # Assuming getFrameSize is available
-        buffer = (ctypes.c_ubyte * frame_size)()
-        ctypes.memmove(buffer, self.frame.client_address_space_data_pointer, frame_size)
+        frame_size = self.libSharedMemoryVideoBuffers.getVideoFrameDataSize(self.frame)
+        pixels     = self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer(self.frame)
+
+        self.outWidth    = self.libSharedMemoryVideoBuffers.getVideoFrameWidth(self.frame)
+        self.outHeight   = self.libSharedMemoryVideoBuffers.getVideoFrameHeight(self.frame)
+        self.outChannels = self.libSharedMemoryVideoBuffers.getVideoFrameChannels(self.frame)
+        print("Reading %ux%u:%u (size %lu) frame at %lu"% (self.outWidth,self.outHeight,self.outChannels,frame_size,pixels))
+
+        # Convert buffer to numpy array 
+        array = np.ctypeslib.as_array(pixels, shape=(self.outHeight, self.outWidth,  self.outChannels)).astype(np.uint8)
+
 
         # Unlock Video Buffer after reading
         self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer(self.frame)
 
-        # Convert buffer to numpy array
-        #array = np.ctypeslib.as_array(buffer)
-        array = np.ctypeslib.as_array(pixels, shape=(numberOfImages, self.outHeight, self.outWidth,  self.outChannels))
         return array
 
 # Test

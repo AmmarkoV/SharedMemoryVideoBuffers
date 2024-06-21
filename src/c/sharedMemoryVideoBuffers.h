@@ -210,6 +210,17 @@ unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideo
  */
 struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, const char *feedName);
 
+
+
+unsigned char * getVideoFrameDataPointer(struct VideoFrame * frame);
+
+unsigned long getVideoFrameDataSize(struct VideoFrame * frame);
+unsigned int getVideoFrameWidth(struct VideoFrame * frame);
+unsigned int getVideoFrameHeight(struct VideoFrame * frame);
+unsigned int getVideoFrameChannels(struct VideoFrame * frame);
+
+
+
 /**
  * @brief Starts writing to a video buffer.
  * @param vf Pointer to the video frame structure.

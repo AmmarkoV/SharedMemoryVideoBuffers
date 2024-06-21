@@ -360,6 +360,59 @@ struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, cons
 }
 
 
+
+
+
+
+unsigned char * getVideoFrameDataPointer(struct VideoFrame * frame)
+{
+  if (frame)
+  {
+    return frame->client_address_space_data_pointer;
+  }
+  return 0;
+}
+
+unsigned long getVideoFrameDataSize(struct VideoFrame * frame)
+{
+  if (frame)
+  {
+    return frame->frame_size;
+  }
+
+  return 0;
+}
+
+unsigned int getVideoFrameWidth(struct VideoFrame * frame)
+{
+  if (frame)
+  {
+    return frame->width;
+  }
+  return 0;
+}
+
+unsigned int getVideoFrameHeight(struct VideoFrame * frame)
+{
+  if (frame)
+  {
+    return frame->height;
+  }
+  return 0;
+}
+
+unsigned int getVideoFrameChannels(struct VideoFrame * frame)
+{
+  if (frame)
+  {
+    return frame->channels;
+  }
+  return 0;
+}
+
+
+
+
 int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels)
 {
    if (context!=0)
