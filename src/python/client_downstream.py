@@ -17,18 +17,16 @@ def main(streamName):
         # Check if the frame is captured successfully
         if smm.frame_size==0:
             print("Error: Couldn't read frame from SHM")
-            break
+        else:
+           # Display the frame in a window
+           cv2.imshow('SharedMemoryVideoBuffer', frame)
+           frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Display the frame in a window
-        cv2.imshow('SharedMemoryVideoBuffer', frame)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Break the loop if 'q' is pressed
-        if cv2.waitKey(0) & 0xFF == ord('q'):
+           # Break the loop if 'q' is pressed
+           if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     
     # Release the webcam and close all OpenCV windows
-    cap.release()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":

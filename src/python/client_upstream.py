@@ -5,6 +5,8 @@ from SharedMemoryManager import SharedMemoryManager
 def main(streamName):
     # Open the first webcam connected to the computer
     cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  800)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 600)
     
     # Check if the webcam is opened successfully
     if not cap.isOpened():

@@ -152,29 +152,29 @@ class SharedMemoryManager:
         print("read_from_shared_memory ")
         # Lock Video Buffer for reading
         res = self.libSharedMemoryVideoBuffers.startReadingFromVideoBufferPointer(self.frame)
-        if res == 0:
-            raise RuntimeError("Failed to lock video buffer for reading")
+        if res:
+ 
+          self.frame_size = self.libSharedMemoryVideoBuffers.getVideoFrameDataSize(self.frame)
+          pixels          = self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer(self.frame)
+          #TODO error check here
+          self.width      = self.libSharedMemoryVideoBuffers.getVideoFrameWidth(self.frame)
+          self.height     = self.libSharedMemoryVideoBuffers.getVideoFrameHeight(self.frame)
+          self.channels   = self.libSharedMemoryVideoBuffers.getVideoFrameChannels(self.frame)
+          print("Reading %ux%u:%u (size %lu) frame at %lu"% (self.width,self.height,self.channels,self.frame_size,pixels))
 
-        self.frame_size = self.libSharedMemoryVideoBuffers.getVideoFrameDataSize(self.frame)
-        pixels          = self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer(self.frame)
-        #TODO error check here
-        self.width      = self.libSharedMemoryVideoBuffers.getVideoFrameWidth(self.frame)
-        self.height     = self.libSharedMemoryVideoBuffers.getVideoFrameHeight(self.frame)
-        self.channels   = self.libSharedMemoryVideoBuffers.getVideoFrameChannels(self.frame)
-        print("Reading %ux%u:%u (size %lu) frame at %lu"% (self.width,self.height,self.channels,self.frame_size,pixels))
+          # Convert buffer to numpy array 
+          array = np.ctypeslib.as_array(pixels, shape=(self.height, self.width,  self.channels)).astype(np.uint8)
 
-        # Convert buffer to numpy array 
-        array = np.ctypeslib.as_array(pixels, shape=(self.height, self.width,  self.channels)).astype(np.uint8)
-
-        # Convert buffer to numpy array 
-        #buffer = (ctypes.c_ubyte * self.frame_size).from_address(pixels)
-        #array = np.ctypeslib.as_array(buffer).reshape((self.height, self.width, self.channels)).astype(np.uint8)
+          # Convert buffer to numpy array 
+          #buffer = (ctypes.c_ubyte * self.frame_size).from_address(pixels)
+          #array = np.ctypeslib.as_array(buffer).reshape((self.height, self.width, self.channels)).astype(np.uint8)
 
 
-        # Unlock Video Buffer after reading
-        self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer(self.frame)
+          # Unlock Video Buffer after reading
+          self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer(self.frame)
 
-        return array
+          return array
+        return None
 
 # Test
 if __name__ == "__main__":
