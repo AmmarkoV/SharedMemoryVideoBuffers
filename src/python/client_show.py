@@ -6,7 +6,8 @@ def main(streamName):
     
     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
                               descriptor = "video_frames.shm", 
-                              frameName  = streamName)
+                              frameName  = streamName,
+                              connect    = True)
 
     # Loop to continuously read frames 
     while True:
@@ -23,7 +24,7 @@ def main(streamName):
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Break the loop if 'q' is pressed
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(0) & 0xFF == ord('q'):
             break
     
     # Release the webcam and close all OpenCV windows

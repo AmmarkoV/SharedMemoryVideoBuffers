@@ -40,7 +40,7 @@ def loadLibrary(filename, relativePath="", forceUpdate=False):
 
 
 class SharedMemoryManager:
-    def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", width=640, height=480, channels=3, forceLibUpdate=False):
+    def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", connect=False, width=640, height=480, channels=3, forceLibUpdate=False):
         # Create a shared memory segment
         self.frameName = frameName
 
@@ -54,18 +54,23 @@ class SharedMemoryManager:
         path = descriptor.encode('utf-8')  
         self.smc = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
 
+        if (connect):
+          self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_int]
+          self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.restype  = ctypes.c_void_p
+          self.frame = self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame(self.smc,0)
+        else:
+          print("Creating descriptor ",descriptor)
+          self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.argtypes = [ctypes.c_void_p,ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_uint]
+          self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.restype  = ctypes.c_int
+          path = frameName.encode('utf-8')  
+          res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,width,height,channels)
 
-        self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.argtypes = [ctypes.c_void_p,ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_uint]
-        self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.restype  = ctypes.c_int
-        path = frameName.encode('utf-8')  
-        res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,width,height,channels)
-
-        #Get Video Buffer Pointer
-        print("Getting frame ",frameName)
-        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
-        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.restype  = ctypes.c_void_p
-        path = frameName.encode('utf-8')  
-        self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
+          #Get Video Buffer Pointer
+          print("Getting frame ",frameName)
+          self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
+          self.libSharedMemoryVideoBuffers.getVideoBufferPointer.restype  = ctypes.c_void_p
+          path = frameName.encode('utf-8')  
+          self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
 
         #Map Video Buffer Pointer
         print("Mapping video buffer memory ")
@@ -159,11 +164,11 @@ class SharedMemoryManager:
         print("Reading %ux%u:%u (size %lu) frame at %lu"% (self.width,self.height,self.channels,self.frame_size,pixels))
 
         # Convert buffer to numpy array 
-        #array = np.ctypeslib.as_array(pixels, shape=(self.outHeight, self.width,  self.channels)).astype(np.uint8)
+        array = np.ctypeslib.as_array(pixels, shape=(self.height, self.width,  self.channels)).astype(np.uint8)
 
         # Convert buffer to numpy array 
-        buffer = (ctypes.c_ubyte * self.frame_size).from_address(pixels)
-        array = np.ctypeslib.as_array(buffer).reshape((self.height, self.width, self.channels)).astype(np.uint8)
+        #buffer = (ctypes.c_ubyte * self.frame_size).from_address(pixels)
+        #array = np.ctypeslib.as_array(buffer).reshape((self.height, self.width, self.channels)).astype(np.uint8)
 
 
         # Unlock Video Buffer after reading
