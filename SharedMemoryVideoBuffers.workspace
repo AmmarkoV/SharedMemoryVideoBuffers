@@ -3,5 +3,6 @@
 	<Workspace title="Workspace">
 		<Project filename="SharedMemoryVideoBuffersServer.cbp" />
 		<Project filename="SharedMemoryVideoBuffersClient.cbp" />
+		<Project filename="SharedMemoryVideoBuffersViewer.cbp" />
 	</Workspace>
 </CodeBlocks_workspace_file>

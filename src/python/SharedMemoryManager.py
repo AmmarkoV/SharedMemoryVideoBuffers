@@ -55,9 +55,10 @@ class SharedMemoryManager:
         self.smc = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
 
         if (connect):
-          self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_int]
-          self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.restype  = ctypes.c_void_p
-          self.frame = self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame(self.smc,0)
+          pass
+          #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_int]
+          #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.restype  = ctypes.c_void_p
+          #self.frame = self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame(self.smc,0)
         else:
           print("Creating descriptor ",descriptor)
           self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.argtypes = [ctypes.c_void_p,ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_uint]
@@ -65,12 +66,12 @@ class SharedMemoryManager:
           path = frameName.encode('utf-8')  
           res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,width,height,channels)
 
-          #Get Video Buffer Pointer
-          print("Getting frame ",frameName)
-          self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
-          self.libSharedMemoryVideoBuffers.getVideoBufferPointer.restype  = ctypes.c_void_p
-          path = frameName.encode('utf-8')  
-          self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
+        #Get Video Buffer Pointer
+        print("Getting frame ",frameName)
+        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
+        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.restype  = ctypes.c_void_p
+        path = frameName.encode('utf-8')  
+        self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
 
         #Map Video Buffer Pointer
         print("Mapping video buffer memory ")

@@ -379,7 +379,6 @@ unsigned long getVideoFrameDataSize(struct VideoFrame * frame)
   {
     return frame->frame_size;
   }
-
   return 0;
 }
 
@@ -511,7 +510,6 @@ int destroyVideoFrame(struct SharedMemoryContext* context, const char *streamNam
 // Connect to existing shared memory context descriptor
 struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path)
 {
-
     setup_signal_handlers();
 
     int shm_fd = shm_open(path, O_RDWR, 0666);
