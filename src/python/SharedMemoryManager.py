@@ -84,6 +84,34 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.getVideoFrameChannels.restype  = ctypes.c_uint
 
 
+    def server(self, frameName="stream1"):
+        print("Creating descriptor ",frameName)
+        path = frameName.encode('utf-8')  
+        res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,self.width,self.height,self.channels)
+
+        #Get Video Buffer Pointer
+        print("Getting frame ",frameName)
+        path = frameName.encode('utf-8')  
+        self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
+
+        #Map Video Buffer Pointer
+        print("Mapping video buffer memory ")
+        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
+
+    def client(self, frameName="stream1"):
+        print("Creating descriptor ",descriptor)
+        path = frameName.encode('utf-8')  
+        res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,width,height,channels)
+
+        #Get Video Buffer Pointer
+        print("Getting frame ",frameName)
+        path = frameName.encode('utf-8')  
+        self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
+
+        #Map Video Buffer Pointer
+        print("Mapping video buffer memory ")
+        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
+
 
     def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", connect=False, width=640, height=480, channels=3, forceLibUpdate=False):
         # Create a shared memory segment
@@ -99,31 +127,21 @@ class SharedMemoryManager:
         path = descriptor.encode('utf-8')  
         self.smc = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
 
+        self.width    = width
+        self.height   = height
+        self.channels = channels
+        self.frame_size = width * height * channels
+
         if (connect):
           pass
           #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_int]
           #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.restype  = ctypes.c_void_p
           #self.frame = self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame(self.smc,0)
         else:
-          print("Creating descriptor ",descriptor)
-          path = frameName.encode('utf-8')  
-          res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,width,height,channels)
-
-        #Get Video Buffer Pointer
-        print("Getting frame ",frameName)
-        path = frameName.encode('utf-8')  
-        self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
-
-        #Map Video Buffer Pointer
-        print("Mapping video buffer memory ")
-        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
+          self.server(frameName=frameName)
 
 
 
-        self.width    = width
-        self.height   = height
-        self.channels = channels
-        self.frame_size = width * height * channels
 
         print("Ready ")
 
