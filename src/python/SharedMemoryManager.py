@@ -40,46 +40,21 @@ def loadLibrary(filename, relativePath="", forceUpdate=False):
 
 
 class SharedMemoryManager:
-    def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", connect=False, width=640, height=480, channels=3, forceLibUpdate=False):
-        # Create a shared memory segment
-        self.frameName = frameName
 
-        print("Loading libSharedMemoryVideoBuffers")
-        self.libSharedMemoryVideoBuffers = loadLibrary(libraryPath, forceUpdate=forceLibUpdate)
-
-        #Connect to descriptor
-        print("Connecting to descriptor ",descriptor)
+    def link(self):
+        #Common C functions used in member python functions
         self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor.argtypes = [ctypes.c_char_p]
         self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor.restype  = ctypes.c_void_p
-        path = descriptor.encode('utf-8')  
-        self.smc = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
 
-        if (connect):
-          pass
-          #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_int]
-          #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.restype  = ctypes.c_void_p
-          #self.frame = self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame(self.smc,0)
-        else:
-          print("Creating descriptor ",descriptor)
-          self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.argtypes = [ctypes.c_void_p,ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_uint]
-          self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.restype  = ctypes.c_int
-          path = frameName.encode('utf-8')  
-          res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,width,height,channels)
+        self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.argtypes = [ctypes.c_void_p,ctypes.c_char_p,ctypes.c_uint,ctypes.c_uint,ctypes.c_uint]
+        self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.restype  = ctypes.c_int
 
-        #Get Video Buffer Pointer
-        print("Getting frame ",frameName)
-        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
-        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.restype  = ctypes.c_void_p
-        path = frameName.encode('utf-8')  
-        self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
+        self.libSharedMemoryVideoBuffers.destroyVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
+        self.libSharedMemoryVideoBuffers.destroyVideoFrame.restype  = ctypes.c_void_p
 
-        #Map Video Buffer Pointer
-        print("Mapping video buffer memory ")
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_int]
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = ctypes.c_int
-        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
 
-        #Common C functions used in member python functions
         self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.restype  = ctypes.c_int
 
@@ -95,6 +70,9 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.restype  = ctypes.c_void_p
 
+        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
+        self.libSharedMemoryVideoBuffers.getVideoBufferPointer.restype  = ctypes.c_void_p
+
         self.libSharedMemoryVideoBuffers.getVideoFrameDataSize.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.getVideoFrameDataSize.restype  = ctypes.c_ulong
 
@@ -104,6 +82,43 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.getVideoFrameHeight.restype    = ctypes.c_uint
         self.libSharedMemoryVideoBuffers.getVideoFrameChannels.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.getVideoFrameChannels.restype  = ctypes.c_uint
+
+
+
+    def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", connect=False, width=640, height=480, channels=3, forceLibUpdate=False):
+        # Create a shared memory segment
+        self.frameName = frameName
+
+        print("Loading libSharedMemoryVideoBuffers")
+        self.libSharedMemoryVideoBuffers = loadLibrary(libraryPath, forceUpdate=forceLibUpdate)
+
+        self.link()
+
+        #Connect to descriptor
+        print("Connecting to descriptor ",descriptor)
+        path = descriptor.encode('utf-8')  
+        self.smc = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
+
+        if (connect):
+          pass
+          #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_int]
+          #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.restype  = ctypes.c_void_p
+          #self.frame = self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame(self.smc,0)
+        else:
+          print("Creating descriptor ",descriptor)
+          path = frameName.encode('utf-8')  
+          res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,width,height,channels)
+
+        #Get Video Buffer Pointer
+        print("Getting frame ",frameName)
+        path = frameName.encode('utf-8')  
+        self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
+
+        #Map Video Buffer Pointer
+        print("Mapping video buffer memory ")
+        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
+
+
 
         self.width    = width
         self.height   = height
@@ -115,8 +130,6 @@ class SharedMemoryManager:
 
     def __del__(self):
         print('Destructor called, unloading libSharedMemoryVideoBuffers')
-        self.libSharedMemoryVideoBuffers.destroyVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
-        self.libSharedMemoryVideoBuffers.destroyVideoFrame.restype  = ctypes.c_void_p
         path = self.frameName.encode('utf-8')  
         self.frame = self.libSharedMemoryVideoBuffers.destroyVideoFrame(self.smc,path) 
 

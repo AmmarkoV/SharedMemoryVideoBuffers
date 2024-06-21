@@ -576,7 +576,9 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
 // Stop reading from a video buffer
 int stopReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
+    fprintf(stderr,"stopWritingToVideoBufferPointer :");
     if (vf==0) { return 0; }
     // No-op for readers
+    fprintf(stderr,GREEN "success\n" NORMAL);
     return 1;
 }
