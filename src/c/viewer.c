@@ -4,12 +4,14 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#define WIDTH  800
-#define HEIGHT 600
+#include "sharedMemoryVideoBuffers.h"
 
-void update_image(unsigned char *buffer, int width, int height, int frame) {
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
+void update_image(unsigned char *buffer, int width, int height, int frame)
+{
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
             int offset = (y * width + x) * 3;
             buffer[offset + 0] = (x + frame) % 256; // Red
             buffer[offset + 1] = (y + frame) % 256; // Green
@@ -18,7 +20,8 @@ void update_image(unsigned char *buffer, int width, int height, int frame) {
     }
 }
 
-int main() {
+int main()
+{
     Display *display;
     Window window;
     XEvent event;
@@ -26,16 +29,80 @@ int main() {
     GC gc;
     XImage *ximage;
     unsigned char *image_data;
-    int frame = 0;
+    int frameNumber = 0;
 
     // Open connection to the X server
     display = XOpenDisplay(NULL);
-    if (display == NULL) {
+    if (display == NULL)
+    {
         fprintf(stderr, "Cannot open display\n");
         exit(1);
     }
 
     screen = DefaultScreen(display);
+
+    //Dimensions
+    int WIDTH  = 800;
+    int HEIGHT = 600;
+
+
+    //------------------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------------------
+    /*
+    const char *shm_name    = "video_frames.shm";
+    const char *stream_name = "stream1";
+    // Client process
+    if (createSharedMemoryContextDescriptor(shm_name) == -1)
+    {
+        return EXIT_FAILURE;
+    }
+
+    struct SharedMemoryContext *context = connectToSharedMemoryContextDescriptor(shm_name);
+    if (!context)
+    {
+        return EXIT_FAILURE;
+    }
+
+    createVideoFrameMetaData(context,stream_name,640,480,3);
+
+    struct VideoFrame *frame = getVideoBufferPointer(context,stream_name);
+    if (!frame)
+    {
+        return EXIT_FAILURE;
+    }
+
+    struct VideoFrameLocalMapping localMap={0};
+    if (map_frame_shared_memory(frame,1) == NULL)  //We want to overwrite the frame->data because we are the client and this makes the python API easier
+    {
+        return EXIT_FAILURE;
+    }
+
+    printSharedMemoryContextState(context);
+
+    fprintf(stderr,"Read %lu bytes of dummy data\n",frame->frame_size);
+    // Example to read from buffer (Client)
+    if (startReadingFromVideoBufferPointer(frame))
+    {
+        unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
+        if (buffer!=0)
+        {
+         memcpy(buffer, frame->client_address_space_data_pointer, frame->frame_size);
+         stopReadingFromVideoBufferPointer(frame);
+         free(buffer);
+
+         WIDTH   = frame->width;
+         HEIGHT  = frame->height;
+        } else
+        {
+         fprintf(stderr,"Failed reading back dummy data..\n");
+        }
+    }*/
+    //------------------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------------------
 
     // Create the window
     window = XCreateSimpleWindow(display, RootWindow(display, screen), 10, 10, WIDTH, HEIGHT, 1,
@@ -51,21 +118,27 @@ int main() {
     gc = XCreateGC(display, window, 0, NULL);
 
     // Allocate memory for the image
-    image_data = (unsigned char *)malloc(WIDTH * HEIGHT * 3);
+    image_data = (unsigned char *) malloc(WIDTH * HEIGHT * 3);
 
     // Create the XImage structure
     ximage = XCreateImage(display, DefaultVisual(display, screen), 24, ZPixmap, 0,
                           (char *)image_data, WIDTH, HEIGHT, 32, 0);
 
+
     // Main event loop
-    while (1) {
+    while (1)
+    {
         // Check for events
-        while (XPending(display)) {
+        while (XPending(display))
+        {
             XNextEvent(display, &event);
-            if (event.type == Expose) {
+            if (event.type == Expose)
+            {
                 // Redraw the image
                 XPutImage(display, window, gc, ximage, 0, 0, 0, 0, WIDTH, HEIGHT);
-            } else if (event.type == KeyPress) {
+            } else
+            if (event.type == KeyPress)
+            {
                 // Exit on key press
                 XCloseDisplay(display);
                 free(image_data);
@@ -74,13 +147,13 @@ int main() {
         }
 
         // Update the image buffer
-        update_image(image_data, WIDTH, HEIGHT, frame);
+        update_image(image_data, WIDTH, HEIGHT, frameNumber);
 
         // Display the updated image
         XPutImage(display, window, gc, ximage, 0, 0, 0, 0, WIDTH, HEIGHT);
 
         // Increment frame counter
-        frame++;
+        frameNumber++;
 
         // Sleep for a short while to control the update rate
         usleep(30000); // 30ms delay (about 33 frames per second)
