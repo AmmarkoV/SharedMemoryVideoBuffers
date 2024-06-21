@@ -60,6 +60,11 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = ctypes.c_int
         res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
 
+        #Common C functions used in member python functions
+        self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.restype  = ctypes.c_int
+        self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.restype  = ctypes.c_int
 
     def __del__(self):
         print('Destructor called, unloading libSharedMemoryVideoBuffers')
@@ -71,8 +76,6 @@ class SharedMemoryManager:
     def copy_numpy_to_shared_memory(self, array):
         print("copy_numpy_to_shared_memory ")
         #Lock Video Buffer
-        self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
-        self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.restype  = ctypes.c_int
         res = self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer(self.frame)
 
         # Check if the array size matches the shared memory size
@@ -92,12 +95,31 @@ class SharedMemoryManager:
 
         print("stopWritingToVideoBufferPointer ")
         # Copy the array data to shared memory
-        self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
-        self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer.restype  = ctypes.c_int
         res = self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer(self.frame)
 
         if res == 0:
             raise RuntimeError("Failed to unlock video buffer after writing")
+
+
+
+    def read_from_shared_memory(self):
+        print("read_from_shared_memory ")
+        # Lock Video Buffer for reading
+        res = self.libSharedMemoryVideoBuffers.startReadingFromVideoBufferPointer(self.frame)
+        if res == 0:
+            raise RuntimeError("Failed to lock video buffer for reading")
+
+        frame_size = self.libSharedMemoryVideoBuffers.getFrameSize(self.frame)  # Assuming getFrameSize is available
+        buffer = (ctypes.c_ubyte * frame_size)()
+        ctypes.memmove(buffer, self.frame.client_address_space_data_pointer, frame_size)
+
+        # Unlock Video Buffer after reading
+        self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer(self.frame)
+
+        # Convert buffer to numpy array
+        #array = np.ctypeslib.as_array(buffer)
+        array = np.ctypeslib.as_array(pixels, shape=(numberOfImages, self.outHeight, self.outWidth,  self.outChannels))
+        return array
 
 # Test
 if __name__ == "__main__":
