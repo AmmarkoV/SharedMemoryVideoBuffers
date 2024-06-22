@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
         stopWritingToVideoBufferPointer(frame);
         free(data);
     }
-     usleep(5000);
+     usleep(115000);
 
     }
 

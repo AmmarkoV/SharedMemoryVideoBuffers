@@ -62,10 +62,9 @@ unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 }
 
 
-int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsigned char * data)
+int writePNM(const char * filename,int width,int height,int channels, unsigned char * data)
 {
     //fprintf(stderr,"saveRawImageToFile(%s) called\n",filename);
-    if (pic==0)      { return 0; }
     if (filename==0) { return 0; }
 
     if(data==0) { fprintf(stderr,"saveRawImageToFile(%s) called for an unallocated (empty) frame , will not write any file output\n",filename); return 0; }
@@ -76,18 +75,18 @@ int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsign
     if (fd!=0)
     {
         unsigned int n;
-        if (pic->channels==3) fprintf(fd, "P6\n");
-        else if (pic->channels==1) fprintf(fd, "P5\n");
+        if (channels==3) fprintf(fd, "P6\n");
+        else if (channels==1) fprintf(fd, "P5\n");
         else
         {
-            fprintf(stderr,"Invalid channels arg (%u) for SaveRawImageToFile\n",pic->channels);
+            fprintf(stderr,"Invalid channels arg (%u) for SaveRawImageToFile\n",channels);
             fclose(fd);
             return 1;
         }
 
-        fprintf(fd, "%d %d\n%u\n", pic->width, pic->height , simplePowPPM(2,8)-1);
+        fprintf(fd, "%d %d\n%u\n", width, height , simplePowPPM(2,8)-1);
 
-        n =  pic->width * pic->height * pic->channels;
+        n =  width * height * channels;
 
         //fprintf(stderr,"fwrite(pic->data, 1 , n , fd);\n");
         fwrite(data, 1 , n , fd);
@@ -102,6 +101,14 @@ int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsign
         return 0;
     }
     return 0;
+}
+
+
+
+int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsigned char * data)
+{
+   if (pic==0)      { return 0; }
+   return writePNM(filename,pic->width,pic->height,pic->channels,data);
 }
 
 
@@ -164,6 +171,21 @@ int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item)
    }
  return 0;
 }
+
+int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
+{
+    if (smvc==0) {return -1; }
+
+    for (unsigned int i = 0; i < smvc->numberOfBuffers; i++)
+    {
+        if (strncmp(smvc->buffer[i].name, feedName, sizeof(smvc->buffer[i].name)) == 0)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
 
 
 // Function to copy data from a buffer to the shared memory buffer
@@ -363,7 +385,9 @@ struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, cons
 
 
 
-
+//------------------------------------------------------------
+//------------------------------------------------------------
+//------------------------------------------------------------
 unsigned char * getVideoFrameDataPointer(struct VideoFrame * frame)
 {
   if (frame)
@@ -408,8 +432,9 @@ unsigned int getVideoFrameChannels(struct VideoFrame * frame)
   }
   return 0;
 }
-
-
+//------------------------------------------------------------
+//------------------------------------------------------------
+//------------------------------------------------------------
 
 
 int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels)

@@ -55,6 +55,8 @@ struct SharedMemoryContext
 
 
 
+int writePNM(const char * filename,int width,int height,int channels, unsigned char * data);
+
 /**
  * @brief Writes a video frame to an image file.
  * @param filename Name of the image file to write.
@@ -158,6 +160,9 @@ struct VideoFrameLocalMapping * allocateLocalMapping();
  * @return 1 on success, 0 on failure.
  */
 int freeLocalMapping(struct VideoFrameLocalMapping * lm);
+
+
+int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName);
 
 /**
  * @brief Gets the pointer to the local mapping for a video frame.

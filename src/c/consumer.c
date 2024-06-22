@@ -43,11 +43,17 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    struct VideoFrameLocalMapping localMap={0};
-    if (map_frame_shared_memory(frame,1) == NULL)  //We want to overwrite the frame->data because we are the client and this makes the python API easier
+    int item = 0;
+    item = resolveFeedNameToID(context,stream_name);
+
+    if (item==-1)
     {
+        fprintf(stderr,"Could not resolve feed %s\n",stream_name);
         return EXIT_FAILURE;
     }
+
+    struct VideoFrameLocalMapping localMap={0};
+    mapRemoteToLocal(context,&localMap,item);
 
 
     srand((unsigned int)time(NULL)); // Seed the random number generator
@@ -55,23 +61,6 @@ int main(int argc, char *argv[])
     while (1)
     {
     printSharedMemoryContextState(context);
-    fprintf(stderr,"Write %lu bytes of dummy data\n",frame->frame_size);
-    // Example to write to buffer (Client)
-    if (startWritingToVideoBufferPointer(frame))
-    {
-        unsigned char *data = (unsigned char*)malloc(frame->frame_size);
-        for (size_t i = 0; i < frame->frame_size; i++)
-        {
-            data[i] = rand() % 255;
-        }
-
-        copy_to_shared_memory((void *)frame, data,frame->frame_size);
-
-        //memcpy(frame->data, data, frame->frame_size);
-        stopWritingToVideoBufferPointer(frame);
-        free(data);
-    }
-     usleep(5000);
 
     fprintf(stderr,"Read %lu bytes of dummy data\n",frame->frame_size);
     // Example to read from buffer (Client)
@@ -80,7 +69,11 @@ int main(int argc, char *argv[])
         unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
         if (buffer!=0)
         {
-         memcpy(buffer, frame->client_address_space_data_pointer, frame->frame_size);
+         unsigned char * data = getLocalMappingPointer(&localMap,item);
+
+         memcpy(buffer, data, frame->frame_size);
+
+         writePNM("data/consumer_stream0.pnm",frame->width,frame->height,frame->channels,data);
          stopReadingFromVideoBufferPointer(frame);
          free(buffer);
         } else
