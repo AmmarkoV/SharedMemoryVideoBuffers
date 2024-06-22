@@ -47,24 +47,30 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    struct VideoFrameLocalMapping localMap={0};
-    mapRemoteToLocal(context,&localMap,item);
+    struct VideoFrameLocalMapping * localMap = allocateLocalMapping();
+    if (localMap==0)
+    {
+        fprintf(stderr,"Could not allocate a local map\n");
+        return EXIT_FAILURE;
+    }
+
+    mapRemoteToLocal(context,localMap,item);
 
 
     srand((unsigned int)time(NULL)); // Seed the random number generator
 
     while (1)
     {
-    printSharedMemoryContextState(context);
+     printSharedMemoryContextState(context);
 
-    fprintf(stderr,"Read %lu bytes of dummy data\n",frame->frame_size);
-    // Example to read from buffer (Client)
-    if (startReadingFromVideoBufferPointer(frame))
-    {
+     fprintf(stderr,"Read %lu bytes of dummy data\n",frame->frame_size);
+     // Example to read from buffer (Client)
+     if (startReadingFromVideoBufferPointer(frame))
+     {
         unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
         if (buffer!=0)
         {
-         unsigned char * data = getLocalMappingPointer(&localMap,item);
+         unsigned char * data = getLocalMappingPointer(localMap,item);
 
          memcpy(buffer, data, frame->frame_size);
 
@@ -75,10 +81,12 @@ int main(int argc, char *argv[])
         {
          fprintf(stderr,"Failed reading back dummy data..\n");
         }
-    }
+     }
      usleep(115000);
 
     }
+
+    freeLocalMapping(localMap);
 
     destroyVideoFrame(context,stream_name);
 

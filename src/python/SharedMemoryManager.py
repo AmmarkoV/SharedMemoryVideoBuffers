@@ -55,6 +55,20 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_int]
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = ctypes.c_int
 
+        self.libSharedMemoryVideoBuffers.resolveFeedNameToID.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
+        self.libSharedMemoryVideoBuffers.resolveFeedNameToID.restype  = ctypes.c_int
+
+        self.libSharedMemoryVideoBuffers.mapRemoteToLocal.argtypes = [ctypes.c_void_p,ctypes.c_void_p,ctypes.c_int]
+        self.libSharedMemoryVideoBuffers.mapRemoteToLocal.restype  = ctypes.c_int
+
+        self.libSharedMemoryVideoBuffers.getLocalMappingPointer.argtypes = [ctypes.c_void_p,ctypes.c_int]
+        self.libSharedMemoryVideoBuffers.getLocalMappingPointer.restype  = ctypes.c_void_p
+
+        self.libSharedMemoryVideoBuffers.allocateLocalMapping.restype = ctypes.c_void_p
+      
+        self.libSharedMemoryVideoBuffers.freeLocalMapping.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.freeLocalMapping.restype     = ctypes.c_int
+
         self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer.restype  = ctypes.c_int
 
@@ -66,6 +80,8 @@ class SharedMemoryManager:
 
         self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer.restype  = ctypes.c_int
+
+
 
         self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.restype  = ctypes.c_void_p
