@@ -13,7 +13,6 @@ def main(streamName):
         print("Error: Couldn't open webcam")
         return
     
-
     ret, frame = cap.read()
     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
                               descriptor = "video_frames.shm", 
@@ -35,7 +34,7 @@ def main(streamName):
         # Display the frame in a window
         cv2.imshow('Webcam', frame)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
+        #print("frame:",frame)
 
         smm.copy_numpy_to_shared_memory(frame)
 

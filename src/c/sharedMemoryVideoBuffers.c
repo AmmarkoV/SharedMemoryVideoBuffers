@@ -135,7 +135,7 @@ unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int it
 {
   if (lm!=0)
   {
-      return lm->data[item];
+      return (unsigned char *) lm->data[item];
   }
   return 0;
 }
@@ -145,14 +145,18 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
 {
   if (context!=0)
   {
-   struct VideoFrame *frame = &context->buffer[item];
-   if (localMap->data[item]==0)
+    if (localMap!=0)
+    {
+     localMap->smc = context;
+     struct VideoFrame *frame = &context->buffer[item];
+     if (localMap->data[item]==0)
                 {
                   //Only do the local mapping if we haven't already
                   localMap->data[item] = map_frame_shared_memory(frame,0);
                   localMap->sz[item]   = frame->frame_size;
                   return 1;
                 }
+    }
   }
 
   return 0;

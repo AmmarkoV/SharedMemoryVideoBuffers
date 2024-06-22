@@ -17,10 +17,12 @@ def main(streamName):
         # Check if the frame is captured successfully
         if (not frame) or smm.frame_size==0:
             print("Error: Couldn't read frame from SHM")
-        else:
+        else:        
+           print("frame:",frame)
+
            # Display the frame in a window
-           cv2.imshow('SharedMemoryVideoBuffer', frame)
            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+           cv2.imshow('SharedMemoryVideoBuffer', frame)
         
            # Break the loop if 'q' is pressed
            if cv2.waitKey(1) & 0xFF == ord('q'):

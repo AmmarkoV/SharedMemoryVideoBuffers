@@ -41,6 +41,7 @@ struct VideoFrame
  */
 struct VideoFrameLocalMapping
 {
+    struct SharedMemoryContext * smc;
     unsigned char *data[MAX_NUMBER_OF_BUFFERS];
     size_t         sz[MAX_NUMBER_OF_BUFFERS];
 };

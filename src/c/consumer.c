@@ -36,9 +36,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    int item = 0;
-    item = resolveFeedNameToID(context,stream_name);
-
+    int item = resolveFeedNameToID(context,stream_name);
     if (item==-1)
     {
         fprintf(stderr,"Could not resolve feed %s\n",stream_name);
@@ -52,32 +50,22 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    mapRemoteToLocal(context,localMap,item);
-
-    while (1)
+    if (mapRemoteToLocal(context,localMap,item))
     {
-     printSharedMemoryContextState(context);
-
-     fprintf(stderr,"Read %lu bytes of dummy data\n",frame->frame_size);
-     // Example to read from buffer (Client)
-     if (startReadingFromVideoBufferPointer(frame))
+     while (1)
      {
-        unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
-        if (buffer!=0)
-        {
+      printSharedMemoryContextState(context);
+
+      fprintf(stderr,"Read %lu bytes of dummy data\n",frame->frame_size);
+      // Example to read from buffer (Client)
+      if (startReadingFromVideoBufferPointer(frame))
+      {
          unsigned char * data = getLocalMappingPointer(localMap,item);
-
-         memcpy(buffer, data, frame->frame_size);
-
          writePNM("data/consumer_stream0.pnm",frame->width,frame->height,frame->channels,data);
          stopReadingFromVideoBufferPointer(frame);
-         free(buffer);
-        } else
-        {
-         fprintf(stderr,"Failed reading back dummy data..\n");
-        }
+      }
+      usleep(115000);
      }
-     usleep(115000);
     }
 
     freeLocalMapping(localMap);
