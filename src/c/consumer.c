@@ -24,13 +24,11 @@ int main(int argc, char *argv[])
     const char *shm_name    = "video_frames.shm";
     const char *stream_name = "stream1";
 
-
     struct SharedMemoryContext *context = connectToSharedMemoryContextDescriptor(shm_name);
     if (!context)
     {
         return EXIT_FAILURE;
     }
-
 
     struct VideoFrame *frame = getVideoBufferPointer(context,stream_name);
     if (!frame)
@@ -56,9 +54,6 @@ int main(int argc, char *argv[])
 
     mapRemoteToLocal(context,localMap,item);
 
-
-    srand((unsigned int)time(NULL)); // Seed the random number generator
-
     while (1)
     {
      printSharedMemoryContextState(context);
@@ -83,7 +78,6 @@ int main(int argc, char *argv[])
         }
      }
      usleep(115000);
-
     }
 
     freeLocalMapping(localMap);

@@ -114,18 +114,18 @@ class SharedMemoryManager:
         print("Mapping video buffer memory ")
         res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
 
-    def client(self, frameName="stream1"):
-        #TODO: create this based on src/c/consumer.c        
-
+    def client(self, frameName="stream1"):   
         #Get Video Buffer Pointer
         print("Getting frame ",frameName)
         path = frameName.encode('utf-8')  
         self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
 
-        #Map Video Buffer Pointer
-        print("Mapping video buffer memory ")
-        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
-
+        self.item     = self.libSharedMemoryVideoBuffers.resolveFeedNameToID(self.smc,path)
+        self.localMap = self.libSharedMemoryVideoBuffers.allocateLocalMapping()
+        if (self.localMap==0):
+            raise RuntimeError("Failed to allocate local mapping")
+        self.libSharedMemoryVideoBuffers.mapRemoteToLocal(self.smc,self.localMap,self.item)
+            
 
     def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", connect=False, width=640, height=480, channels=3, forceLibUpdate=False):
         # Create a shared memory segment
@@ -139,29 +139,30 @@ class SharedMemoryManager:
         #Connect to descriptor
         print("Connecting to descriptor ",descriptor)
         path = descriptor.encode('utf-8')  
-        self.smc = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
+        self.smc      = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
+        self.localMap = None
+        self.item     = 0
 
-        self.width    = width
-        self.height   = height
-        self.channels = channels
+        self.width      = width
+        self.height     = height
+        self.channels   = channels
         self.frame_size = width * height * channels
+        self.connect    = connect
 
         if (connect):
-          pass
-          #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_int]
-          #self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame.restype  = ctypes.c_void_p
-          #self.frame = self.libSharedMemoryVideoBuffers.getSharedMemoryContextVideoFrame(self.smc,0)
+          self.client(frameName=frameName)
         else:
           self.server(frameName=frameName)
-
-
-
 
         print("Ready ")
 
 
     def __del__(self):
         print('Destructor called, unloading libSharedMemoryVideoBuffers')
+
+        if (self.connect):
+           self.libSharedMemoryVideoBuffers.freeLocalMapping(self.localMap) 
+ 
         path = self.frameName.encode('utf-8')  
         self.frame = self.libSharedMemoryVideoBuffers.destroyVideoFrame(self.smc,path) 
 
@@ -207,6 +208,9 @@ class SharedMemoryManager:
           self.height     = self.libSharedMemoryVideoBuffers.getVideoFrameHeight(self.frame)
           self.channels   = self.libSharedMemoryVideoBuffers.getVideoFrameChannels(self.frame)
           print("Reading %ux%u:%u (size %lu) frame at %lu"% (self.width,self.height,self.channels,self.frame_size,pixels))
+  
+          if (self.connect):
+             pixels = self.libSharedMemoryVideoBuffers.getLocalMappingPointer(self.localMap,item)
 
           # Convert buffer to numpy array 
           array = np.ctypeslib.as_array(pixels, shape=(self.height, self.width,  self.channels)).astype(np.uint8)
@@ -215,10 +219,9 @@ class SharedMemoryManager:
           #buffer = (ctypes.c_ubyte * self.frame_size).from_address(pixels)
           #array = np.ctypeslib.as_array(buffer).reshape((self.height, self.width, self.channels)).astype(np.uint8)
 
-
           # Unlock Video Buffer after reading
           self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer(self.frame)
-
+           
           return array
         return None
 
