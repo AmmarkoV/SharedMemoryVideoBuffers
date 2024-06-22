@@ -19,11 +19,11 @@
 
 void handle_segfault(int sig)
 {
-    void *array[10];
+    void *array[100];
     size_t size;
 
     // get void*'s for all entries on the stack
-    size = backtrace(array, 10);
+    size = backtrace(array, 100);
 
     // print out all the frames to stderr
     fprintf(stderr, "Error: signal %d:\n", sig);
@@ -111,6 +111,10 @@ struct VideoFrameLocalMapping * allocateLocalMapping()
 {
     struct VideoFrameLocalMapping * lm = 0;
     lm =(struct VideoFrameLocalMapping *) malloc(sizeof(struct VideoFrameLocalMapping));
+    if (lm!=0)
+    {
+        memset(lm,0,sizeof(struct VideoFrameLocalMapping));
+    }
     return lm;
 }
 
@@ -142,13 +146,21 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
     {
      localMap->smc = context;
      struct VideoFrame *frame = &context->buffer[item];
-     if (localMap->data[item]==0)
+     if (frame!=0)
+     {
+      if (localMap->data[item]==0)
                 {
                   //Only do the local mapping if we haven't already
                   localMap->data[item] = map_frame_shared_memory(frame,0);
                   localMap->sz[item]   = frame->frame_size;
                   return 1;
+                } else
+                {
+                  fprintf(stderr,"Item %u was already mapped\n",item);
+                  return 1;
                 }
+
+     }
     }
   }
 
@@ -236,9 +248,6 @@ int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *c
   return 0;
 }
 
-
-
-
 void printSharedMemoryContextState(struct SharedMemoryContext *context)
 {
   if (context==0) { fprintf(stderr,"Empty Context\n"); return; }
@@ -248,8 +257,6 @@ void printSharedMemoryContextState(struct SharedMemoryContext *context)
          fprintf(stderr,"Bank %u : %ux%u:%u @ %p\n",i,context->buffer[i].width,context->buffer[i].height,context->buffer[i].channels,context->buffer[i].client_address_space_data_pointer);
      }
 }
-
-
 
 // Create and open shared memory context descriptor
 int createSharedMemoryContextDescriptor(const char *path)
@@ -377,11 +384,6 @@ struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, cons
     }
     return NULL;
 }
-
-
-
-
-
 //------------------------------------------------------------
 //------------------------------------------------------------
 //------------------------------------------------------------
@@ -432,8 +434,6 @@ unsigned int getVideoFrameChannels(struct VideoFrame * frame)
 //------------------------------------------------------------
 //------------------------------------------------------------
 //------------------------------------------------------------
-
-
 int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels)
 {
    if (context!=0)
@@ -469,8 +469,6 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
    }
    return EXIT_FAILURE;
 }
-
-
 
 // Destroy a video frame and its shared memory
 int destroyVideoFrame(struct SharedMemoryContext* context, const char *streamName)

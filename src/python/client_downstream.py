@@ -15,7 +15,7 @@ def main(streamName):
         frame = smm.read_from_shared_memory()
         
         # Check if the frame is captured successfully
-        if (not frame) or smm.frame_size==0:
+        if  (frame is None) or (smm.frame_size==0):
             print("Error: Couldn't read frame from SHM")
         else:        
            print("frame:",frame)

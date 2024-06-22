@@ -131,7 +131,9 @@ class SharedMemoryManager:
             raise RuntimeError("Failed to allocate local mapping")
 
         self.item     = self.libSharedMemoryVideoBuffers.resolveFeedNameToID(self.smc,path)
-        self.libSharedMemoryVideoBuffers.mapRemoteToLocal(self.smc,self.localMap,self.item)
+        res = self.libSharedMemoryVideoBuffers.mapRemoteToLocal(self.smc,self.localMap,self.item)
+        if (res==0):
+            raise RuntimeError("Failed to map remote to local")
             
 
     def __init__(self, libraryPath, descriptor="video_frames.shm", frameName="stream1", connect=False, width=640, height=480, channels=3, forceLibUpdate=False):
@@ -144,7 +146,6 @@ class SharedMemoryManager:
 
         #Connect to descriptor
         print("Connecting to descriptor ",descriptor)
-        path = descriptor.encode('utf-8')  
         self.smc      = None
         self.localMap = None
         self.item     = 0
@@ -168,9 +169,9 @@ class SharedMemoryManager:
 
         if (self.connect):
            self.libSharedMemoryVideoBuffers.freeLocalMapping(self.localMap) 
- 
-        path = self.frameName.encode('utf-8')  
-        self.libSharedMemoryVideoBuffers.destroyVideoFrame(self.smc,path) 
+        else:
+           path = self.frameName.encode('utf-8')  
+           self.libSharedMemoryVideoBuffers.destroyVideoFrame(self.smc,path) 
 
     def copy_numpy_to_shared_memory(self, array):
         print("copy_numpy_to_shared_memory ")
@@ -221,11 +222,6 @@ class SharedMemoryManager:
              array = np.ctypeslib.as_array(pixels, shape=(self.height, self.width, self.channels)).copy()
 
           print("Reading %ux%u:%u (size %lu) frame at "% (self.width, self.height, self.channels, self.frame_size), pixels)
-
-          # Convert buffer to numpy array 
-          print("array",array)
-
-          # Convert buffer to numpy array 
 
           # Unlock Video Buffer after reading
           self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer(self.frame)
