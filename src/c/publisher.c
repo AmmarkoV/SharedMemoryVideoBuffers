@@ -73,23 +73,6 @@ int main(int argc, char *argv[])
     }
      usleep(5000);
 
-    fprintf(stderr,"Read %lu bytes of dummy data\n",frame->frame_size);
-    // Example to read from buffer (Client)
-    if (startReadingFromVideoBufferPointer(frame))
-    {
-        unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
-        if (buffer!=0)
-        {
-         memcpy(buffer, frame->client_address_space_data_pointer, frame->frame_size);
-         stopReadingFromVideoBufferPointer(frame);
-         free(buffer);
-        } else
-        {
-         fprintf(stderr,"Failed reading back dummy data..\n");
-        }
-    }
-     usleep(5000);
-
     }
 
     destroyVideoFrame(context,stream_name);
