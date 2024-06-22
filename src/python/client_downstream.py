@@ -18,7 +18,7 @@ def main(streamName):
         if  (frame is None) or (smm.frame_size==0):
             print("Error: Couldn't read frame from SHM")
         else:        
-           print("frame:",frame)
+           #print("frame:",frame)
 
            # Display the frame in a window
            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
