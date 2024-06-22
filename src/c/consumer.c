@@ -23,11 +23,7 @@ int main(int argc, char *argv[])
 {
     const char *shm_name    = "video_frames.shm";
     const char *stream_name = "stream1";
-    // Client process
-    if (createSharedMemoryContextDescriptor(shm_name) == -1)
-    {
-        return EXIT_FAILURE;
-    }
+
 
     struct SharedMemoryContext *context = connectToSharedMemoryContextDescriptor(shm_name);
     if (!context)
@@ -35,7 +31,6 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    createVideoFrameMetaData(context,stream_name,640,480,3);
 
     struct VideoFrame *frame = getVideoBufferPointer(context,stream_name);
     if (!frame)
@@ -81,7 +76,7 @@ int main(int argc, char *argv[])
          fprintf(stderr,"Failed reading back dummy data..\n");
         }
     }
-     usleep(5000);
+     usleep(115000);
 
     }
 

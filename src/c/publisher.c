@@ -49,32 +49,36 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    unsigned char *data = (unsigned char*)malloc(frame->frame_size);
+
+    if (data!=0)
+    {
 
     srand((unsigned int)time(NULL)); // Seed the random number generator
 
     while (1)
     {
-    printSharedMemoryContextState(context);
-    fprintf(stderr,"Write %lu bytes of dummy data\n",frame->frame_size);
-    // Example to write to buffer (Client)
-    if (startWritingToVideoBufferPointer(frame))
-    {
+     printSharedMemoryContextState(context);
+     fprintf(stderr,"Write %lu bytes of dummy data\n",frame->frame_size);
+     // Example to write to buffer (Client)
+     if (startWritingToVideoBufferPointer(frame))
+     {
         unsigned char *data = (unsigned char*)malloc(frame->frame_size);
+ 
         for (size_t i = 0; i < frame->frame_size; i++)
         {
             data[i] = rand() % 255;
         }
 
         copy_to_shared_memory((void *)frame, data,frame->frame_size);
-
-        //memcpy(frame->data, data, frame->frame_size);
         stopWritingToVideoBufferPointer(frame);
-        free(data);
-    }
+        
+     }
      usleep(115000);
 
     }
 
+    } //Managed to allocate memory
     destroyVideoFrame(context,stream_name);
 
     fprintf(stderr,"Done..\n");
