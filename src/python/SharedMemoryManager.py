@@ -50,10 +50,10 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.createVideoFrameMetaData.restype  = ctypes.c_int
 
         self.libSharedMemoryVideoBuffers.destroyVideoFrame.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
-        self.libSharedMemoryVideoBuffers.destroyVideoFrame.restype  = ctypes.c_void_p
+        self.libSharedMemoryVideoBuffers.destroyVideoFrame.restype  = ctypes.c_int
 
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_int]
-        self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = ctypes.c_int
+        self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = POINTER(ctypes.c_byte)
 
         self.libSharedMemoryVideoBuffers.resolveFeedNameToID.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
         self.libSharedMemoryVideoBuffers.resolveFeedNameToID.restype  = ctypes.c_int
@@ -85,7 +85,7 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer.restype  = ctypes.c_int
 
         self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.argtypes = [ctypes.c_void_p]
-        self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.restype  = ctypes.c_void_p
+        self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.restype  = POINTER(ctypes.c_byte)
 
         self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
         self.libSharedMemoryVideoBuffers.getVideoBufferPointer.restype  = ctypes.c_void_p
@@ -126,11 +126,11 @@ class SharedMemoryManager:
         if (self.frame==0):
             raise RuntimeError("Failed to find video buffer pointer")
 
-        self.item     = self.libSharedMemoryVideoBuffers.resolveFeedNameToID(self.smc,path)
         self.localMap = self.libSharedMemoryVideoBuffers.allocateLocalMapping()
         if (self.localMap==0):
             raise RuntimeError("Failed to allocate local mapping")
 
+        self.item     = self.libSharedMemoryVideoBuffers.resolveFeedNameToID(self.smc,path)
         self.libSharedMemoryVideoBuffers.mapRemoteToLocal(self.smc,self.localMap,self.item)
             
 
@@ -170,7 +170,7 @@ class SharedMemoryManager:
            self.libSharedMemoryVideoBuffers.freeLocalMapping(self.localMap) 
  
         path = self.frameName.encode('utf-8')  
-        self.frame = self.libSharedMemoryVideoBuffers.destroyVideoFrame(self.smc,path) 
+        self.libSharedMemoryVideoBuffers.destroyVideoFrame(self.smc,path) 
 
     def copy_numpy_to_shared_memory(self, array):
         print("copy_numpy_to_shared_memory ")

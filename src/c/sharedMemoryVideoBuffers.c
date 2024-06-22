@@ -48,7 +48,6 @@ void setup_signal_handlers()
     }
 }
 
-
 unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 {
     if (exp==0) return 1;
@@ -60,7 +59,6 @@ unsigned int simplePowPPM(unsigned int base,unsigned int exp)
     }
     return retres;
 }
-
 
 int writePNM(const char * filename,int width,int height,int channels, unsigned char * data)
 {
@@ -103,15 +101,11 @@ int writePNM(const char * filename,int width,int height,int channels, unsigned c
     return 0;
 }
 
-
-
 int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsigned char * data)
 {
    if (pic==0)      { return 0; }
    return writePNM(filename,pic->width,pic->height,pic->channels,data);
 }
-
-
 
 struct VideoFrameLocalMapping * allocateLocalMapping()
 {
@@ -119,7 +113,6 @@ struct VideoFrameLocalMapping * allocateLocalMapping()
     lm =(struct VideoFrameLocalMapping *) malloc(sizeof(struct VideoFrameLocalMapping));
     return lm;
 }
-
 
 int freeLocalMapping(struct VideoFrameLocalMapping * lm)
 {
