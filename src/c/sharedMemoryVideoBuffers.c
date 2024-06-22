@@ -373,7 +373,8 @@ unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideo
 // Get a pointer to a video buffer by feed name
 struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, const char *feedName)
 {
-    if (smvc==0) {return NULL; }
+    if (smvc==0)     {return NULL; }
+    if (feedName==0) {return NULL; }
 
     for (unsigned int i = 0; i < smvc->numberOfBuffers; i++)
     {
