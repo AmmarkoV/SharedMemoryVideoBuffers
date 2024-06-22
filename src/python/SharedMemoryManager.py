@@ -99,9 +99,7 @@ class SharedMemoryManager:
         res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
 
     def client(self, frameName="stream1"):
-        print("Creating descriptor ",descriptor)
-        path = frameName.encode('utf-8')  
-        res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,width,height,channels)
+        #TODO: create this based on src/c/consumer.c        
 
         #Get Video Buffer Pointer
         print("Getting frame ",frameName)
