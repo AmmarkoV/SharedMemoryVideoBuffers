@@ -63,6 +63,7 @@ if __name__ == '__main__':
         cap.release()
         sys.exit(1)
 
+    #Resize frame
     frame = resize_with_padding(frame, targetWidth, targetHeight)
 
     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
@@ -78,11 +79,13 @@ if __name__ == '__main__':
             eprint("Error: Could not read frame from video source")
             break
 
+        #Resize frame
+        frame = resize_with_padding(frame, targetWidth, targetHeight)
+
         # Display output
         cv2.imshow('Object Detection', frame)
 
         #Pass to shared memory using RGB order instead of BGR
-        frame = resize_with_padding(frame, targetWidth, targetHeight)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         smm.copy_numpy_to_shared_memory(frame)
 
