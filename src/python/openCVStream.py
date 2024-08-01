@@ -43,6 +43,7 @@ if __name__ == '__main__':
     streamName = "stream3"
     targetWidth  = 800
     targetHeight = 600
+    loop = True  # Set this to False if looping is not desired
 
 
     source = "./"
@@ -75,15 +76,24 @@ if __name__ == '__main__':
 
     while cap.isOpened():
         ret, frame = cap.read()
+        #if not ret:
+        #    eprint("Error: Could not read frame from video source")
+        #    break
         if not ret:
-            eprint("Error: Could not read frame from video source")
-            break
+            if loop:
+                print("Looping Stream %s "%streamName)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
+            else:
+                eprint("Error: Could not read frame from video source")
+                break
+
 
         #Resize frame
         frame = resize_with_padding(frame, targetWidth, targetHeight)
 
         # Display output
-        cv2.imshow('Object Detection', frame)
+        cv2.imshow('Stream %s'%streamName, frame)
 
         #Pass to shared memory using RGB order instead of BGR
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
