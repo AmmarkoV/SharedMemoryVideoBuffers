@@ -41,6 +41,10 @@ def resize_with_padding(image, width, height, DO_PADDING=True, TINY_FLOAT=1e-5):
 
 if __name__ == '__main__':
     streamName = "stream3"
+    targetWidth  = 800
+    targetHeight = 600
+
+
     source = "./"
     if len(sys.argv) > 1:
         source = sys.argv[1]
@@ -59,6 +63,8 @@ if __name__ == '__main__':
         cap.release()
         sys.exit(1)
 
+    frame = resize_with_padding(frame, targetWidth, targetHeight)
+
     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
                               descriptor = "video_frames.shm", 
                               frameName = streamName, 
@@ -72,13 +78,16 @@ if __name__ == '__main__':
             eprint("Error: Could not read frame from video source")
             break
 
-        frame = resize_with_padding(frame, 800, 600)
+        # Display output
+        cv2.imshow('Object Detection', frame)
+
+        #Pass to shared memory using RGB order instead of BGR
+        frame = resize_with_padding(frame, targetWidth, targetHeight)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         smm.copy_numpy_to_shared_memory(frame)
 
-        # Display output
-        cv2.imshow('Object Detection', frame)
-        if cv2.waitKey(10) & 0xff == ord('q'):
+        #Accept Escape or Q to terminate this script
+        if cv2.waitKey(1) & 0xff == ord('q'):
             break
 
     cap.release()
