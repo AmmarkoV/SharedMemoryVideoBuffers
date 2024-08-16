@@ -561,7 +561,25 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
     if (vf==0) { return 0; }
 
     fprintf(stderr,"startWritingToVideoBufferPointer :");
-    if (__sync_lock_test_and_set(&vf->locked, 1))
+    int attempts = 0;
+    int result   = 0;
+
+    while (attempts<100)
+    {
+      if (__sync_lock_test_and_set(&vf->locked, 1))
+      {
+        usleep(10);
+      } else
+      {
+          result = 1;
+          break;
+      }
+
+      ++attempts;
+    }
+
+
+    if (!result)
     {
         fprintf(stderr,RED "failed\n" NORMAL);
         return 0; // Buffer is already locked
@@ -583,6 +601,8 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
 // Start reading from a video buffer
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
+    return startWritingToVideoBufferPointer(vf);
+    /*
     if (vf==0) { return 0; }
     fprintf(stderr,"startReadingFromVideoBufferPointer :");
     if (__sync_fetch_and_add(&vf->locked, 0))
@@ -591,15 +611,17 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
         return 0; // Buffer is locked
     }
     fprintf(stderr,GREEN "success\n" NORMAL);
-    return 1;
+    return 1;*/
 }
 
 // Stop reading from a video buffer
 int stopReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
+    return stopWritingToVideoBufferPointer(vf);
+    /*
     fprintf(stderr,"stopWritingToVideoBufferPointer :");
     if (vf==0) { return 0; }
     // No-op for readers
     fprintf(stderr,GREEN "success\n" NORMAL);
-    return 1;
+    return 1;*/
 }
