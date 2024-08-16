@@ -5,5 +5,7 @@
 		<Project filename="SharedMemoryVideoBuffersClient.cbp" />
 		<Project filename="SharedMemoryVideoBuffersViewer.cbp" />
 		<Project filename="SharedMemoryVideoBuffersConsumer.cbp" />
+		<Project filename="../ComputerVisionServer/src/WebServer/WebServer.cbp" />
+		<Project filename="../AmmarServer/src/AmmServerlib/AmmServerlib.cbp" />
 	</Workspace>
 </CodeBlocks_workspace_file>

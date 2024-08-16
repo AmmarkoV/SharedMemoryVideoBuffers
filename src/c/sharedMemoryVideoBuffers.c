@@ -132,7 +132,10 @@ unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int it
 {
   if (lm!=0)
   {
+     if (item<lm->smc->numberOfBuffers)
+     {
       return (unsigned char *) lm->data[item];
+     }
   }
   return 0;
 }
@@ -144,6 +147,8 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
   {
     if (localMap!=0)
     {
+     if (item<localMap->smc->numberOfBuffers)
+     {
      localMap->smc = context;
      struct VideoFrame *frame = &context->buffer[item];
      if (frame!=0)
@@ -160,9 +165,10 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
                   return 1;
                 }
 
-     }
-    }
-  }
+     } // there is a frame to map
+    } //item number is valid
+   } //local map exists
+  } //context exists
 
   return 0;
 }
@@ -170,22 +176,28 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
 
 int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item)
 {
-   if ( (localmap->data[item]!=0) && (localmap->sz[item]!=0) )
-   {
-    fprintf(stderr,"Unmapping memory for item %u\n",item);
-    munmap(localmap->data[item],localmap->sz[item]);
-    localmap->sz[item]   = 0;
-    localmap->data[item] = 0;
-    return 1;
-   }
+ if (localmap!=0)
+  {
+   if (item<localmap->smc->numberOfBuffers)
+     {
+      if ( (localmap->data[item]!=0) && (localmap->sz[item]!=0) )
+       {
+        fprintf(stderr,"Unmapping memory for item %u\n",item);
+        munmap(localmap->data[item],localmap->sz[item]);
+        localmap->sz[item]   = 0;
+        localmap->data[item] = 0;
+        return 1;
+       }
+     }
+  }
  return 0;
 }
 
 int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
 {
-    if (smvc==0) {return -1; }
+    if (smvc==0) { return -1; }
 
-    for (unsigned int i = 0; i < smvc->numberOfBuffers; i++)
+    for (unsigned int i=0; i<smvc->numberOfBuffers; i++)
     {
         if (strncmp(smvc->buffer[i].name, feedName, sizeof(smvc->buffer[i].name)) == 0)
         {
@@ -213,8 +225,6 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
     }
 }
 
-
-
 int getSharedMemoryContextMAXBuffers()
 {
   return MAX_NUMBER_OF_BUFFERS;
@@ -229,12 +239,14 @@ int getSharedMemoryContextNumberOfBuffers(struct SharedMemoryContext *context)
   return 0;
 }
 
-
 struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext *context, int item)
 {
   if (context!=0)
   {
-     return &context->buffer[item];
+    if ( context->numberOfBuffers > item)
+    {
+      return &context->buffer[item];
+    }
   }
   return 0;
 }
@@ -243,7 +255,10 @@ int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *c
 {
   if (context!=0)
   {
+    if ( context->numberOfBuffers > item)
+    {
      return (context->buffer[item].client_address_space_data_pointer!=NULL);
+    }
   }
   return 0;
 }
@@ -564,11 +579,11 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
     int attempts = 0;
     int result   = 0;
 
-    while (attempts<100)
+    while (attempts<ATTEMPTS_TO_LOCK_A_BUFFER)
     {
       if (__sync_lock_test_and_set(&vf->locked, 1))
       {
-        usleep(10);
+        usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
       } else
       {
           result = 1;
@@ -582,10 +597,10 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
     if (!result)
     {
         fprintf(stderr,RED "failed\n" NORMAL);
-        return 0; // Buffer is already locked
+        return 0; // Buffer is already locked and we timed out waiting for it
     }
     fprintf(stderr,GREEN "success\n" NORMAL);
-    return 1;
+    return 1; // We have locked the buffer
 }
 
 // Stop writing to a video buffer

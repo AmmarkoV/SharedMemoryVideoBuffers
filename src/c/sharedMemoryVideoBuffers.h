@@ -21,6 +21,9 @@ extern "C"
 #define MAX_SHM_NAME 256
 #define MAX_NUMBER_OF_BUFFERS 10
 
+#define ATTEMPTS_TO_LOCK_A_BUFFER 1000
+#define SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS 10
+
 /** @brief Structure to hold video frame metadata.
  */
 struct VideoFrame
