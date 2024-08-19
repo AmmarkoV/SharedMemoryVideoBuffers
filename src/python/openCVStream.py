@@ -4,6 +4,7 @@ import numpy as np
 import os
 import sys
 import cv2
+import time
 
 from SharedMemoryManager import SharedMemoryManager
 
@@ -43,6 +44,7 @@ if __name__ == '__main__':
     streamName = "stream3"
     targetWidth  = 800
     targetHeight = 600
+    sleepTimeMS  = 30 / 1000
     loop = True  # Set this to False if looping is not desired
 
 
@@ -102,6 +104,10 @@ if __name__ == '__main__':
         #Accept Escape or Q to terminate this script
         if cv2.waitKey(1) & 0xff == ord('q'):
             break
+
+        if (sleepTimeMS!=0):
+            time.sleep(sleepTimeMS) 
+
 
     cap.release()
     cv2.destroyAllWindows()
