@@ -30,7 +30,7 @@ struct VideoFrame
 {
     //Shared Data
     //-----------------------------------------------------------------------------------------------------------
-    char locked;
+    volatile char locked;
     char name[MAX_SHM_NAME+1];
     unsigned int width;
     unsigned int height;
