@@ -131,7 +131,7 @@ unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int it
 {
   if (lm!=0)
   {
-     if (item<lm->smc->numberOfBuffers)
+     if ((lm->smc!=0) && (item<lm->smc->numberOfBuffers) )
      {
       return (unsigned char *) lm->data[item];
      }
