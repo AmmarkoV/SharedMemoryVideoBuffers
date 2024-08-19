@@ -109,8 +109,7 @@ int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsign
 
 struct VideoFrameLocalMapping * allocateLocalMapping()
 {
-    struct VideoFrameLocalMapping * lm = 0;
-    lm =(struct VideoFrameLocalMapping *) malloc(sizeof(struct VideoFrameLocalMapping));
+    struct VideoFrameLocalMapping * lm = (struct VideoFrameLocalMapping *) malloc(sizeof(struct VideoFrameLocalMapping));
     if (lm!=0)
     {
         memset(lm,0,sizeof(struct VideoFrameLocalMapping));
@@ -147,7 +146,7 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
   {
     if (localMap!=0)
     {
-     if (item<localMap->smc->numberOfBuffers)
+     if ((localMap->smc!=0) && (item<localMap->smc->numberOfBuffers) )
      {
      localMap->smc = context;
      struct VideoFrame *frame = &context->buffer[item];
@@ -178,7 +177,7 @@ int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item)
 {
  if (localmap!=0)
   {
-   if (item<localmap->smc->numberOfBuffers)
+   if ((localmap->smc!=0) && (item<localmap->smc->numberOfBuffers) )
      {
       if ( (localmap->data[item]!=0) && (localmap->sz[item]!=0) )
        {
