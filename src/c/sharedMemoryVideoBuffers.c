@@ -148,11 +148,11 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
     {
      if (item<context->numberOfBuffers)
      {
-     localMap->smc = context;
-     struct VideoFrame *frame = &context->buffer[item];
-     if (frame!=0)
-     {
-      if (localMap->data[item]==0)
+      localMap->smc = context;
+      struct VideoFrame *frame = &context->buffer[item];
+      if (frame!=0)
+      {
+       if (localMap->data[item]==0)
                 {
                   //Only do the local mapping if we haven't already
                   localMap->data[item] = map_frame_shared_memory(frame,0);
@@ -164,7 +164,7 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
                   return 1;
                 }
 
-     } // there is a frame to map
+      } // there is a frame to map
     } //item number is valid
    } //local map exists
   } //context exists
