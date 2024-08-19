@@ -146,7 +146,7 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
   {
     if (localMap!=0)
     {
-     if ((localMap->smc!=0) && (item<localMap->smc->numberOfBuffers) )
+     if (item<context->numberOfBuffers)
      {
      localMap->smc = context;
      struct VideoFrame *frame = &context->buffer[item];
