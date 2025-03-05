@@ -21,7 +21,14 @@ def main(streamName):
            #print("frame:",frame)
 
            # Display the frame in a window
-           frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+           print("Frame RAW: ",frame.shape)
+           if (frame.shape[2]==4):
+              frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2GRAY)
+              frame = np.transpose(frame, axes=None)
+           elif (frame.shape[2]==3):
+              frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+           print("Frame Processed : ",frame.shape)
+
            cv2.imshow('SharedMemoryVideoBuffer', frame)
         
            # Break the loop if 'q' is pressed
