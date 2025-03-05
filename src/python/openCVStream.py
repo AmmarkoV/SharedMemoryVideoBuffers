@@ -103,6 +103,7 @@ if __name__ == '__main__':
 
         #Accept Escape or Q to terminate this script
         if cv2.waitKey(1) & 0xff == ord('q'):
+            print("Terminating after keyboard request")
             break
 
         if (sleepTimeMS!=0):

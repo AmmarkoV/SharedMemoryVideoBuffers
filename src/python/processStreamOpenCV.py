@@ -24,7 +24,7 @@ def sobel_filter(image):
     return image
 
 if __name__ == '__main__':
-    input_stream_name = "dance"
+    input_stream_name = "street"
     output_stream_name = "dance_output"
     
     # Shared memory descriptors and dimensions
