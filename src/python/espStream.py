@@ -106,10 +106,14 @@ class ESP32CamStreamer():
 if __name__ == '__main__':
      streamName = "stream2"
      source ="http://192.168.1.119:80"
+     sleepTimeMS  = 0
+
      if (len(sys.argv)>1):
          source = "http://%s:80" % sys.argv[1] 
      if (len(sys.argv)>2):
          streamName = sys.argv[2] 
+     if len(sys.argv) > 3:
+         sleepTimeMS = float(sys.argv[3])/ 1000
 
      cap = ESP32CamStreamer(url = source)
 
@@ -126,5 +130,8 @@ if __name__ == '__main__':
 
        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
        smm.copy_numpy_to_shared_memory(frame)
-       cap.visualize()
+       cap.visualize(windowname=streamName)
+
+       if (sleepTimeMS!=0):
+            time.sleep(sleepTimeMS) 
 

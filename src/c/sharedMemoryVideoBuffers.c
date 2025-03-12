@@ -1,3 +1,9 @@
+/** @file sharedMemoryVideoBuffers.c
+ *  @brief  A shared memory wrapper to make processing video streams from multiple processes easier.
+ *  Repository : https://github.com/AmmarkoV/SharedMemoryVideoBuffers
+ *  @author Ammar Qammaz (AmmarkoV)
+ */
+
 #include "sharedMemoryVideoBuffers.h"
 
 #include <fcntl.h>
