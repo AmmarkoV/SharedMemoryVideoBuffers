@@ -90,7 +90,7 @@ int getSharedMemoryContextNumberOfBuffers(struct SharedMemoryContext *context);
  * @param item Index of the video frame to get.
  * @return Pointer to the video frame.
  */
-struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext *context, int item);
+struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext *context, unsigned int item);
 
 /**
  * @brief Checks if a video frame in a shared memory context is populated.
@@ -98,7 +98,7 @@ struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext 
  * @param item Index of the video frame to check.
  * @return 1 if populated, 0 otherwise.
  */
-int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *context, int item);
+int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *context, unsigned int item);
 
 /**
  * @brief Prints the state of a shared memory context.
@@ -174,7 +174,7 @@ int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
  * @param item Index of the video frame.
  * @return Pointer to the local mapping.
  */
-unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int item);
+unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm, unsigned int item);
 
 /**
  * @brief Maps a remote video frame to local memory.
@@ -183,7 +183,7 @@ unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int it
  * @param item Index of the video frame to map.
  * @return 1 on success, 0 on failure.
  */
-int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocalMapping * localMap,int item);
+int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocalMapping * localMap, unsigned int item);
 
 /**
  * @brief Unmaps a local mapping for a video frame.
@@ -191,7 +191,7 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
  * @param item Index of the video frame to unmap.
  * @return 1 on success, 0 on failure.
  */
-int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item);
+int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,unsigned int item);
 
 /**
  * @brief Copies data to shared memory for a video frame.

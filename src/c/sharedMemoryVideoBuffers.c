@@ -133,7 +133,7 @@ int freeLocalMapping(struct VideoFrameLocalMapping * lm)
   return 0;
 }
 
-unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int item)
+unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,unsigned int item)
 {
   if (lm!=0)
   {
@@ -146,7 +146,7 @@ unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,int it
 }
 
 
-int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocalMapping * localMap,int item)
+int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocalMapping * localMap,unsigned int item)
 {
   if (context!=0)
   {
@@ -179,7 +179,7 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
 }
 
 
-int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,int item)
+int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,unsigned int item)
 {
  if (localmap!=0)
   {
@@ -244,7 +244,7 @@ int getSharedMemoryContextNumberOfBuffers(struct SharedMemoryContext *context)
   return 0;
 }
 
-struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext *context, int item)
+struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext *context, unsigned int item)
 {
   if (context!=0)
   {
@@ -256,7 +256,7 @@ struct VideoFrame * getSharedMemoryContextVideoFrame(struct SharedMemoryContext 
   return 0;
 }
 
-int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *context, int item)
+int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *context, unsigned int item)
 {
   if (context!=0)
   {
@@ -460,7 +460,7 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
    if (context!=0)
    {
       int contextID = -1;
-      for (int i=0; i<context->numberOfBuffers; i++)
+      for (unsigned int i=0; i<context->numberOfBuffers; i++)
       {
          if (strcmp(streamName,context->buffer[i].name)==0)
          {
