@@ -24,6 +24,8 @@ extern "C"
 #define ATTEMPTS_TO_LOCK_A_BUFFER 1000
 #define SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS 10
 
+#define DEBUG_MESSAGES 0
+
 /** @brief Structure to hold video frame metadata.
  */
 struct VideoFrame

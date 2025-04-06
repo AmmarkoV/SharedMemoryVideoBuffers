@@ -26,16 +26,16 @@ TARGETS      = server client viewer consumer publisher $(LIBRARY_NAME)
 all: $(TARGETS)
 
 server: $(SERVER_OBJ)
-	$(CC)  -o $@ $(CFLAGS) $^
+	$(CC) -o $@ $(CFLAGS) $^
 
 client: $(CLIENT_OBJ)
-	$(CC)  -o $@ $(CFLAGS) $^
+	$(CC) -o $@ $(CFLAGS) $^
 
 consumer: $(CONSUMER_OBJ)
-	$(CC)  -o $@ $(CFLAGS) $^
+	$(CC) -o $@ $(CFLAGS) $^
 
 publisher: $(PUBLISHER_OBJ)
-	$(CC)  -o $@ $(CFLAGS) $^
+	$(CC) -o $@ $(CFLAGS) $^
 
 viewer: $(VIEWER_OBJ)
 	$(CC) -o $@ $^ $(X11LIBS)

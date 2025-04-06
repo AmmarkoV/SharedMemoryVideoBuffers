@@ -202,7 +202,8 @@ class SharedMemoryManager:
     def read_from_shared_memory(self):
         print("read_from_shared_memory ")
 
-        self.libSharedMemoryVideoBuffers.printSharedMemoryContextState(self.smc)
+        #self.libSharedMemoryVideoBuffers.printSharedMemoryContextState(self.smc)
+
         # Lock Video Buffer for reading
         res = self.libSharedMemoryVideoBuffers.startReadingFromVideoBufferPointer(self.frame)
         if res:
