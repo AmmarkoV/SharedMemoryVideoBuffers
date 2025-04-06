@@ -26,26 +26,26 @@ TARGETS      = server client viewer consumer publisher $(LIBRARY_NAME)
 all: $(TARGETS)
 
 server: $(SERVER_OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC)  -o $@ $(CFLAGS) $^
 
 client: $(CLIENT_OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC)  -o $@ $(CFLAGS) $^
 
 consumer: $(CONSUMER_OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC)  -o $@ $(CFLAGS) $^
 
 publisher: $(PUBLISHER_OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC)  -o $@ $(CFLAGS) $^
 
 viewer: $(VIEWER_OBJ)
-	$(CC) $(CFLAGS) -o $@ $^ $(X11LIBS)
+	$(CC) -o $@ $^ $(X11LIBS)
 
 $(LIBRARY_NAME): $(LIBRARY_OBJ)
-	$(CC) $(LDFLAGS)  $^ -o $@
+	$(CC) $(LDFLAGS)  $^ -o $@ $(CFLAGS) 
 
 $(OBJ_DIR)/%.o: src/c/%.c
 	mkdir -p $(OBJ_DIR)
-	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+	$(CC) -fPIC -c $< -o $@ $(CFLAGS) 
 
 clean:
 	rm -f $(OBJ_DIR)/*.o $(TARGETS) $(LIBRARY_NAME)
