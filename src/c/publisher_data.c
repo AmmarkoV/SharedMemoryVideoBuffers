@@ -42,10 +42,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    struct
 
-    createGenericMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned long dataSize);
-    createVideoFrameMetaData(context,stream_name,640,480,3);
+    createGenericMetaData(context,stream_name,(unsigned int) sizeof(struct sample_data));
+    //createVideoFrameMetaData(context,stream_name,640,480,3);
 
     struct VideoFrame *frame = getVideoBufferPointer(context,stream_name);
     if (!frame)
