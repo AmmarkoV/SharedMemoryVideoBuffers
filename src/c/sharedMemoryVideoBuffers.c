@@ -466,6 +466,11 @@ unsigned int getVideoFrameChannels(struct VideoFrame * frame)
   }
   return 0;
 }
+
+
+
+
+
 //------------------------------------------------------------
 //------------------------------------------------------------
 //------------------------------------------------------------
@@ -478,7 +483,7 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
       {
          if (strcmp(streamName,context->buffer[i].name)==0)
          {
-           fprintf(stderr,"Stream already existing \n");
+           fprintf(stderr,"Stream already exists\n");
            contextID = i;
          }
       }
@@ -504,6 +509,49 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
    }
    return EXIT_FAILURE;
 }
+
+
+
+//------------------------------------------------------------
+//------------------------------------------------------------
+//------------------------------------------------------------
+int createGenericMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int dataSize)
+{
+   if (context!=0)
+   {
+      int contextID = -1;
+      for (unsigned int i=0; i<context->numberOfBuffers; i++)
+      {
+         if (strcmp(streamName,context->buffer[i].name)==0)
+         {
+           fprintf(stderr,"Stream already exists\n");
+           contextID = i;
+         }
+      }
+
+      if (contextID==-1)
+      {
+         fprintf(stderr,"Creating new stream %s\n",streamName);
+         contextID = context->numberOfBuffers++;
+      }
+    // Example to add a new buffer (Server)
+    struct VideoFrame *newBuffer = &context->buffer[contextID];
+    snprintf(newBuffer->name,MAX_SHM_NAME,"%s",streamName);
+    newBuffer->width      = dataSize;
+    newBuffer->height     = 1;
+    newBuffer->channels   = 1;
+    newBuffer->frame_size = dataSize;
+
+    if (create_frame_shared_memory(newBuffer) == 0)
+    {
+     return EXIT_SUCCESS;
+    }
+
+   }
+   return EXIT_FAILURE;
+}
+
+
 
 // Destroy a video frame and its shared memory
 int destroyVideoFrame(struct SharedMemoryContext* context, const char *streamName)

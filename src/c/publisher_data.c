@@ -18,11 +18,18 @@
 #include "sharedMemoryVideoBuffers.h"
 
 
+struct sample_data
+{
+    float typeA[6000];
+    float typeB[4000];
+    float typeC[1000];
+};
+
 
 int main(int argc, char *argv[])
 {
     const char *shm_name    = "video_frames.shm";
-    const char *stream_name = "stream1";
+    const char *stream_name = "data_stream1";
     // Client process
     if (createSharedMemoryContextDescriptor(shm_name) == -1)
     {
@@ -35,6 +42,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    struct
+
+    createGenericMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned long dataSize);
     createVideoFrameMetaData(context,stream_name,640,480,3);
 
     struct VideoFrame *frame = getVideoBufferPointer(context,stream_name);
@@ -64,7 +74,7 @@ int main(int argc, char *argv[])
      if (startWritingToVideoBufferPointer(frame))
      {
         unsigned char *data = (unsigned char*)malloc(frame->frame_size);
- 
+
         for (size_t i = 0; i < frame->frame_size; i++)
         {
             data[i] = rand() % 255;
@@ -72,7 +82,7 @@ int main(int argc, char *argv[])
 
         copy_to_shared_memory((void *)frame, data,frame->frame_size);
         stopWritingToVideoBufferPointer(frame);
-        
+
      }
      usleep(115000);
 

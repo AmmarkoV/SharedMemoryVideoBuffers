@@ -146,6 +146,18 @@ int create_frame_shared_memory(struct VideoFrame *frame);
  */
 int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels);
 
+
+
+/**
+ * @brief Creates metadata for a generic data frame.
+ * @param context Pointer to the shared memory context.
+ * @param streamName Name of the stream.
+ * @param dataSize Size of data in bytes for the data frame.
+ * @return 0 on success, -1 on failure.
+ */
+int createGenericMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int dataSize);
+
+
 /**
  * @brief Destroys a video frame.
  * @param context Pointer to the shared memory context.
