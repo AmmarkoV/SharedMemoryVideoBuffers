@@ -47,6 +47,10 @@ $(OBJ_DIR)/%.o: src/c/%.c
 	mkdir -p $(OBJ_DIR)
 	$(CC) -fPIC -c $< -o $@ $(CFLAGS) 
 
+install: $(LIBRARY_NAME)
+	sudo cp $(LIBRARY_NAME) /usr/local/lib/
+	sudo ldconfig
+
 clean:
 	rm -f $(OBJ_DIR)/*.o $(TARGETS) $(LIBRARY_NAME)
 
