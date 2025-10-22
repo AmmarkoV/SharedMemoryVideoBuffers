@@ -129,7 +129,7 @@ if __name__ == '__main__':
      if (len(sys.argv)>2):
          streamName = sys.argv[2] 
 
-     cap = FolderStreamer(path = source,width = 800,height = 600)
+     cap = FolderStreamer(path = source)#,width = 800,height = 600)
 
      ret, frame = cap.read()
      smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
@@ -147,3 +147,5 @@ if __name__ == '__main__':
        cap.visualize()
 
 
+     # Release the stream
+     cap.release() 

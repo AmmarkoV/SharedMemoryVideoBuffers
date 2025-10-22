@@ -374,8 +374,8 @@ int create_frame_shared_memory(struct VideoFrame *frame)
 unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideoFramePointer)
 {
     unsigned char * result = NULL;
+    if (frame==0) { fprintf(stderr,"error: map_frame_shared_memory called without a valid video frame!\n"); return NULL; }
     fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,frame->frame_size);
-    if (frame==0)    { return NULL; }
 
     int shm_fd = shm_open(frame->name, O_RDWR, 0666);
     if (shm_fd  == -1)
