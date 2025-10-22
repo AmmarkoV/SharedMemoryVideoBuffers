@@ -70,11 +70,14 @@ class FolderStreamer():
             #----------------------------------------------------------------------
             filenameJPG = "%s/%s%05u.jpg" % (self.path,self.label,self.frameNumber)
             filenamePNG = "%s/%s%05u.png" % (self.path,self.label,self.frameNumber)
+            filenamePNM = "%s/%s%05u.pnm" % (self.path,self.label,self.frameNumber)
             #----------------------------------------------------------------------
             if (checkIfFileExists(filenameJPG)):
                    self.img = cv2.imread(filenameJPG)
             elif (checkIfFileExists(filenamePNG)):  
                    self.img = cv2.imread(filenamePNG)
+            elif (checkIfFileExists(filenamePNM)):  
+                   self.img = cv2.imread(filenamePNM)
             else: 
                    eprint("Could not find ",filenameJPG," or ",filenamePNG)
                    self.img = None
