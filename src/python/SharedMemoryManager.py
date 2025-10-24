@@ -187,12 +187,17 @@ class SharedMemoryManager:
         array_ptr = array.ctypes.data_as(ctypes.c_void_p)
         size      = array.nbytes
         try:
-          print(f"copy_to_shared_memory {size} bytes ({array.shape[0]} x {array.shape[1]} x {array.shape[2]})")
-          print("copy_to_shared_memory ",size," bytes (",array.shape[0] * array.shape[1] * array.shape[2],")")
+          width    = array.shape[0]
+          height   = array.shape[1]
+          channels = 1
+          if (len(array.shape)>2): 
+                channels = array.shape[2]
+          print(f"copy_to_shared_memory {size} bytes ({width} x {height} x {channels})")
+          print("copy_to_shared_memory ",size," bytes (",width * height * channels,")")
           self.libSharedMemoryVideoBuffers.copy_to_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_void_p,ctypes.c_uint]
           self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size)
         except Exception as e:
-          print("An exception occurred while copy_to_shared_memory:", str(e))
+          print("An exception occurred in copy_to_shared_memory:", str(e))
 
         print("stopWritingToVideoBufferPointer ")
         # Copy the array data to shared memory
