@@ -49,7 +49,8 @@ class FolderStreamer():
                path       = "./",
                label      = "colorFrame_0_",
                width      = 0,
-               height     = 0
+               height     = 0,
+               loop       = True 
               ):
       self.path        = path
       self.label       = label
@@ -57,6 +58,20 @@ class FolderStreamer():
       self.width       = width
       self.height      = height
       self.should_stop = False
+      self.loop        = loop
+
+      # Pre-scan available frames to know how many exist
+      self.available_frames = sorted([
+            int(f.replace(label, "").split(".")[0])
+            for f in os.listdir(path)
+            if f.startswith(label) and (f.endswith(".jpg") or f.endswith(".png") or f.endswith(".pnm"))
+        ])
+
+      if not self.available_frames:
+            eprint("No frames found in folder:", path)
+      else:
+            eprint(f"Found {len(self.available_frames)} frames, looping = {self.loop}")
+
 
   def isOpened(self):
       return not self.should_stop
@@ -65,22 +80,34 @@ class FolderStreamer():
       print("Release Called ") 
       self.should_stop = True 
 
-  def read(self):  
+  def read(self):
+            # Clamp or wrap frame index depending on loop mode
+            if self.frameNumber >= len(self.available_frames):
+              if self.loop:
+                self.frameNumber = 0
+              else:
+                self.should_stop = True
+                return False, None
+
             # Read frame from camera
             #----------------------------------------------------------------------
             filenameJPG = "%s/%s%05u.jpg" % (self.path,self.label,self.frameNumber)
             filenamePNG = "%s/%s%05u.png" % (self.path,self.label,self.frameNumber)
             filenamePNM = "%s/%s%05u.pnm" % (self.path,self.label,self.frameNumber)
             #----------------------------------------------------------------------
-            if (checkIfFileExists(filenameJPG)):
-                   self.img = cv2.imread(filenameJPG)
-            elif (checkIfFileExists(filenamePNG)):  
-                   self.img = cv2.imread(filenamePNG)
-            elif (checkIfFileExists(filenamePNM)):  
-                   self.img = cv2.imread(filenamePNM)
-            else: 
-                   eprint("Could not find ",filenameJPG," or ",filenamePNG)
+            try:
+              if (checkIfFileExists(filenameJPG)):
+                   self.img = cv2.imread(filenameJPG, cv2.IMREAD_UNCHANGED)
+              elif (checkIfFileExists(filenamePNG)):  
+                   self.img = cv2.imread(filenamePNG, cv2.IMREAD_UNCHANGED)
+              elif (checkIfFileExists(filenamePNM)):  
+                   self.img = cv2.imread(filenamePNM, cv2.IMREAD_UNCHANGED)
+              else: 
+                   eprint("Could not find ",filenameJPG," or ",filenamePNG," or ",filenamePNM)
                    self.img = None
+            except Exception as e:
+                   eprint("Failed to open ",filenameJPG," or ",filenamePNG," or ",filenamePNM)
+                   eprint(e)
             #----------------------------------------------------------------------
 
             if not self.img is None:
@@ -108,11 +135,14 @@ class FolderStreamer():
 
   def visualize(
                 self,
-                windowname='Object Detection',
+                windowname=None,
                 width=800,
                 height=600
                ): 
             # Display output
+            if windowname is None:
+               windowname='Folder Stream %s (scaled)' % self.path
+
             cv2.imshow(windowname, cv2.resize(self.img,(width,height)))
 
             if cv2.waitKey(10) & 0xff == ord('q'):
@@ -132,12 +162,19 @@ if __name__ == '__main__':
      cap = FolderStreamer(path = source)#,width = 800,height = 600)
 
      ret, frame = cap.read()
+
+     width      = frame.shape[1]
+     height     = frame.shape[0]
+     channels   = 1
+     if (len(frame.shape)>2):
+          channels   = frame.shape[2]
+
      smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
                                descriptor = "video_frames.shm", 
                                frameName  = streamName, 
-                               width      = frame.shape[1],
-                               height     = frame.shape[0],
-                               channels   = frame.shape[2])
+                               width      = width,
+                               height     = height,
+                               channels   = channels)
 
      while not cap.should_stop:
        ret, frame = cap.read()
