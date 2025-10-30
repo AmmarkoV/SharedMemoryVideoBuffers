@@ -176,7 +176,7 @@ class SharedMemoryManager:
            self.libSharedMemoryVideoBuffers.destroyVideoFrame(self.smc,path) 
 
     def copy_numpy_to_shared_memory(self, array):
-        print("copy_numpy_to_shared_memory ")
+        #print("copy_numpy_to_shared_memory ")
         #Lock Video Buffer
         res = self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer(self.frame)
 
@@ -200,7 +200,7 @@ class SharedMemoryManager:
         except Exception as e:
           print("An exception occurred in copy_to_shared_memory:", str(e))
 
-        print("stopWritingToVideoBufferPointer ")
+        #print("stopWritingToVideoBufferPointer ")
         # Copy the array data to shared memory
         res = self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer(self.frame)
         if res == 0:
