@@ -5,11 +5,20 @@
 #include <string.h>
 #include <unistd.h>
 
-int main()
+int main (int argc, char **argv)
 {
     struct VideoFrameLocalMapping * localMap = allocateLocalMapping();
     const char *shm_name = "video_frames.shm";
     char filename[256]={0};
+
+    int receive_characters = 1;
+    for (int i=0; i<argc; i++)
+    {
+        if (strcmp(argv[i], "--nokb") == 0)
+        {
+         receive_characters = 0;
+        }
+    }
 
 
     //Server creates and zeroes out all existing data..
@@ -29,7 +38,13 @@ int main()
 
     while (1)
     {
-        getchar();  // Wait for Enter key
+        if (receive_characters)
+        {
+          getchar();  // Wait for Enter key
+        } else
+        {
+           usleep(10000000);
+        }
 
         if (context->numberOfBuffers==0)
         {
