@@ -16,6 +16,7 @@ from ctypes import *
 
 # Load C library
 def loadLibrary(filename, relativePath="", forceUpdate=False):
+    import sys
     import os
     from os.path import exists
     if (relativePath != ""):
