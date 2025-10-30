@@ -4,6 +4,8 @@ import numpy as np
 import os
 import sys
 import cv2
+import time
+
 
 from SharedMemoryManager import SharedMemoryManager
 def eprint(*args, **kwargs):
@@ -145,14 +147,14 @@ class FolderStreamer():
 
             cv2.imshow(windowname, cv2.resize(self.img,(width,height)))
 
-            if cv2.waitKey(10) & 0xff == ord('q'):
+            if cv2.waitKey(1) & 0xff == ord('q'):
                 cv2.destroyAllWindows()
                 self.should_stop = True
                 #break
 
 
 if __name__ == '__main__':
-     streamName = "stream3"
+     streamName = "stream1"
      source ="./"
      if (len(sys.argv)>1):
          source = sys.argv[1] 
@@ -163,6 +165,7 @@ if __name__ == '__main__':
 
      ret, frame = cap.read()
 
+     delayMilliseconds = 30
      width      = frame.shape[1]
      height     = frame.shape[0]
      channels   = 1
@@ -183,6 +186,9 @@ if __name__ == '__main__':
           frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
        smm.copy_numpy_to_shared_memory(frame)
        cap.visualize()
+       
+       time.sleep(delayMilliseconds / 1000.0)
+       
 
 
      # Release the stream
