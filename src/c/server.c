@@ -4,9 +4,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/mman.h>
+
+static volatile int running = 1;
+static struct SharedMemoryContext  *g_context  = NULL;
+static struct VideoFrameLocalMapping *g_localMap = NULL;
+
+static void handle_signal(int sig)
+{
+    (void)sig;
+    running = 0;
+}
 
 int main (int argc, char **argv)
 {
+    signal(SIGINT,  handle_signal);
+    signal(SIGTERM, handle_signal);
+
     struct VideoFrameLocalMapping * localMap = allocateLocalMapping();
     const char *shm_name = "video_frames.shm";
     char filename[256]={0};
@@ -32,18 +47,20 @@ int main (int argc, char **argv)
     {
         return EXIT_FAILURE;
     }
+    g_context  = context;
+    g_localMap = localMap;
 
     system("mkdir -p data/");
     printf("Server is ready. Press Enter to encode frames.\n");
 
-    while (1)
+    while (running)
     {
         if (receive_characters)
         {
           getchar();  // Wait for Enter key
         } else
         {
-           usleep(10000000);
+           usleep(100000); // 100ms
         }
 
         if (context->numberOfBuffers==0)
@@ -87,7 +104,15 @@ int main (int argc, char **argv)
               unmapLocalMappingItem(localMap,i);
             }
         } //we scan each of the available buffers
-    } //server always on
+    } //server main loop
+
+    // Cleanup on SIGINT/SIGTERM
+    for (unsigned int i = 0; i < MAX_NUMBER_OF_BUFFERS; i++)
+    {
+        unmapLocalMappingItem(localMap, i);
+    }
+    freeLocalMapping(localMap);
+    munmap(context, sizeof(struct SharedMemoryContext));
 
     return EXIT_SUCCESS;
 }

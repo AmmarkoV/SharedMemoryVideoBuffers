@@ -1,4 +1,4 @@
-/** @file example.c
+/** @file publisher.c
  *  @brief  An example to organize a large number of concurrently working threads without
  *  too many lines of code or difficulty understanding what is happening
  *  https://github.com/AmmarkoV/SharedMemoryVideoBuffers
@@ -6,7 +6,7 @@
  */
 
 //Can also be compiled using :
-//gcc  -O3 example.c -pthread -lm -o example
+//gcc  -O3 publisher.c -pthread -lm -o publisher
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -14,21 +14,27 @@
 #include <math.h>
 #include <time.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "sharedMemoryVideoBuffers.h"
 
+static volatile int running = 1;
 
+static void handle_signal(int sig)
+{
+    (void)sig;
+    running = 0;
+}
 
 int main(int argc, char *argv[])
 {
     const char *shm_name    = "video_frames.shm";
     const char *stream_name = "stream1";
-    // Client process
-    if (createSharedMemoryContextDescriptor(shm_name) == -1)
-    {
-        return EXIT_FAILURE;
-    }
 
+    signal(SIGINT,  handle_signal);
+    signal(SIGTERM, handle_signal);
+
+    // Connect to the existing shared memory context created by the server
     struct SharedMemoryContext *context = connectToSharedMemoryContextDescriptor(shm_name);
     if (!context)
     {
@@ -43,7 +49,6 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    struct VideoFrameLocalMapping localMap={0};
     if (map_frame_shared_memory(frame,1) == NULL)  //We want to overwrite the frame->data because we are the client and this makes the python API easier
     {
         return EXIT_FAILURE;
@@ -56,15 +61,13 @@ int main(int argc, char *argv[])
 
     srand((unsigned int)time(NULL)); // Seed the random number generator
 
-    while (1)
+    while (running)
     {
      printSharedMemoryContextState(context);
      fprintf(stderr,"Write %lu bytes of dummy data\n",frame->frame_size);
      // Example to write to buffer (Client)
      if (startWritingToVideoBufferPointer(frame))
      {
-        unsigned char *data = (unsigned char*)malloc(frame->frame_size);
- 
         for (size_t i = 0; i < frame->frame_size; i++)
         {
             data[i] = rand() % 255;
@@ -72,12 +75,12 @@ int main(int argc, char *argv[])
 
         copy_to_shared_memory((void *)frame, data,frame->frame_size);
         stopWritingToVideoBufferPointer(frame);
-        
      }
      usleep(115000);
 
     }
 
+    free(data);
     } //Managed to allocate memory
     destroyVideoFrame(context,stream_name);
 

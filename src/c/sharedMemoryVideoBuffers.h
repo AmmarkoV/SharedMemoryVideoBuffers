@@ -33,6 +33,7 @@ struct VideoFrame
     //Shared Data
     //-----------------------------------------------------------------------------------------------------------
     volatile char locked;
+    volatile int is_populated; //<- 1 when the frame's shared memory has been created, 0 otherwise
     char name[MAX_SHM_NAME+1];
     unsigned int width;
     unsigned int height;

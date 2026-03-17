@@ -36,7 +36,6 @@ def loadLibrary(filename, relativePath="", forceUpdate=False):
         sys.exit(0)
 
     libDataLoader = CDLL(filename, mode=ctypes.RTLD_GLOBAL)
-    libDataLoader.connect()
 
     return libDataLoader
 
@@ -102,13 +101,18 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.getVideoFrameChannels.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.getVideoFrameChannels.restype  = ctypes.c_uint
 
+        self.libSharedMemoryVideoBuffers.copy_to_shared_memory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+        self.libSharedMemoryVideoBuffers.copy_to_shared_memory.restype  = None
+
     def server(self, descriptor="video_frames.shm", frameName="stream1"):
-        path = descriptor.encode('utf-8')  
+        path = descriptor.encode('utf-8')
         self.smc      = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
 
         print("Creating descriptor ",frameName)
-        path = frameName.encode('utf-8')  
+        path = frameName.encode('utf-8')
         res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,self.width,self.height,self.channels)
+        if res != 0:
+            raise RuntimeError(f"createVideoFrameMetaData failed for stream '{frameName}'")
 
         #Get Video Buffer Pointer
         print("Getting frame ",frameName)
@@ -116,7 +120,9 @@ class SharedMemoryManager:
 
         #Map Video Buffer Pointer
         print("Mapping video buffer memory ")
-        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context 
+        res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context
+        if not res:
+            raise RuntimeError(f"map_frame_shared_memory failed for stream '{frameName}'")
 
     def client(self, descriptor="video_frames.shm", frameName="stream1"):   
         path = descriptor.encode('utf-8')  
@@ -169,11 +175,19 @@ class SharedMemoryManager:
     def __del__(self):
         print('Destructor called, unloading libSharedMemoryVideoBuffers')
 
-        if (self.connect):
-           self.libSharedMemoryVideoBuffers.freeLocalMapping(self.localMap) 
+        # Guard against AttributeError if __init__ raised before all attributes were set
+        if not hasattr(self, 'libSharedMemoryVideoBuffers'):
+            return
+
+        if getattr(self, 'connect', False):
+            if getattr(self, 'localMap', None):
+                self.libSharedMemoryVideoBuffers.freeLocalMapping(self.localMap)
         else:
-           path = self.frameName.encode('utf-8')  
-           self.libSharedMemoryVideoBuffers.destroyVideoFrame(self.smc,path) 
+            smc       = getattr(self, 'smc', None)
+            frameName = getattr(self, 'frameName', None)
+            if smc and frameName:
+                path = frameName.encode('utf-8')
+                self.libSharedMemoryVideoBuffers.destroyVideoFrame(smc, path)
 
     def copy_numpy_to_shared_memory(self, array):
         #print("copy_numpy_to_shared_memory ")
@@ -188,14 +202,14 @@ class SharedMemoryManager:
         array_ptr = array.ctypes.data_as(ctypes.c_void_p)
         size      = array.nbytes
         try:
-          width    = array.shape[0]
-          height   = array.shape[1]
+          # NumPy image shape is (height, width[, channels])
+          height   = array.shape[0]
+          width    = array.shape[1]
           channels = 1
-          if (len(array.shape)>2): 
+          if (len(array.shape)>2):
                 channels = array.shape[2]
           print(f"copy_to_shared_memory {size} bytes ({width} x {height} x {channels})")
           print("copy_to_shared_memory ",size," bytes (",width * height * channels,")")
-          self.libSharedMemoryVideoBuffers.copy_to_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_void_p,ctypes.c_uint]
           self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size)
         except Exception as e:
           print("An exception occurred in copy_to_shared_memory:", str(e))
