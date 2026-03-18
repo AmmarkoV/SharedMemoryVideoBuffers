@@ -238,7 +238,7 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
         {
            if (frame->frame_size >= n)
            {
-             fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,frame->client_address_space_data_pointer);
+             //fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,frame->client_address_space_data_pointer);
              memcpy(frame->client_address_space_data_pointer,src, n);
            } else { fprintf(stderr,"copy_to_shared_memory: Will not overflow target \n"); }
         } else { fprintf(stderr,"copy_to_shared_memory: No client address space data pointer \n"); }
