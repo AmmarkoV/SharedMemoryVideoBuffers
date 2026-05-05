@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <time.h>
 
 #define NORMAL   "\033[0m"
 #define BLACK   "\033[30m"      /* Black */
@@ -230,7 +231,7 @@ int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
 
 
 // Function to copy data from a buffer to the shared memory buffer
-void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
+void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, unsigned long unix_timestamp)
 {
   if ( (frame!=0) && (src!=0) && (n!=0) )
     {
@@ -240,6 +241,7 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n)
            {
              //fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,frame->client_address_space_data_pointer);
              memcpy(frame->client_address_space_data_pointer,src, n);
+             frame->unix_timestamp = (unix_timestamp != 0) ? unix_timestamp : (unsigned long) time(NULL);
            } else { fprintf(stderr,"copy_to_shared_memory: Will not overflow target \n"); }
         } else { fprintf(stderr,"copy_to_shared_memory: No client address space data pointer \n"); }
     } else { fprintf(stderr,"copy_to_shared_memory: No Target VideoFrame our valid source \n"); }
@@ -465,6 +467,23 @@ unsigned int getVideoFrameChannels(struct VideoFrame * frame)
     return frame->channels;
   }
   return 0;
+}
+
+unsigned long getVideoFrameTimestamp(struct VideoFrame * frame)
+{
+  if (frame)
+  {
+    return frame->unix_timestamp;
+  }
+  return 0;
+}
+
+void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timestamp)
+{
+  if (frame)
+  {
+    frame->unix_timestamp = (unix_timestamp != 0) ? unix_timestamp : (unsigned long) time(NULL);
+  }
 }
 
 

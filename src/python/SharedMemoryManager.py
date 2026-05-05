@@ -101,7 +101,13 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.getVideoFrameChannels.argtypes = [ctypes.c_void_p]
         self.libSharedMemoryVideoBuffers.getVideoFrameChannels.restype  = ctypes.c_uint
 
-        self.libSharedMemoryVideoBuffers.copy_to_shared_memory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+        self.libSharedMemoryVideoBuffers.getVideoFrameTimestamp.argtypes = [ctypes.c_void_p]
+        self.libSharedMemoryVideoBuffers.getVideoFrameTimestamp.restype  = ctypes.c_ulong
+
+        self.libSharedMemoryVideoBuffers.setVideoFrameTimestamp.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        self.libSharedMemoryVideoBuffers.setVideoFrameTimestamp.restype  = None
+
+        self.libSharedMemoryVideoBuffers.copy_to_shared_memory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong]
         self.libSharedMemoryVideoBuffers.copy_to_shared_memory.restype  = None
 
     def server(self, descriptor="video_frames.shm", frameName="stream1"):
@@ -189,7 +195,7 @@ class SharedMemoryManager:
                 path = frameName.encode('utf-8')
                 self.libSharedMemoryVideoBuffers.destroyVideoFrame(smc, path)
 
-    def copy_numpy_to_shared_memory(self, array):
+    def copy_numpy_to_shared_memory(self, array, unix_timestamp=0):
         #print("copy_numpy_to_shared_memory ")
         #Lock Video Buffer
         res = self.libSharedMemoryVideoBuffers.startWritingToVideoBufferPointer(self.frame)
@@ -210,9 +216,15 @@ class SharedMemoryManager:
                 channels = array.shape[2]
           print(f"copy_to_shared_memory {size} bytes ({width} x {height} x {channels})")
           print("copy_to_shared_memory ",size," bytes (",width * height * channels,")")
-          self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size)
+          self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size, ctypes.c_ulong(unix_timestamp))
         except Exception as e:
           print("An exception occurred in copy_to_shared_memory:", str(e))
+
+    def get_timestamp(self):
+        return self.libSharedMemoryVideoBuffers.getVideoFrameTimestamp(self.frame)
+
+    def set_timestamp(self, unix_timestamp=0):
+        self.libSharedMemoryVideoBuffers.setVideoFrameTimestamp(self.frame, ctypes.c_ulong(unix_timestamp))
 
         #print("stopWritingToVideoBufferPointer ")
         # Copy the array data to shared memory
@@ -228,10 +240,11 @@ class SharedMemoryManager:
         # Lock Video Buffer for reading
         res = self.libSharedMemoryVideoBuffers.startReadingFromVideoBufferPointer(self.frame)
         if res:
-          self.frame_size = self.libSharedMemoryVideoBuffers.getVideoFrameDataSize(self.frame)
-          self.width      = self.libSharedMemoryVideoBuffers.getVideoFrameWidth(self.frame)
-          self.height     = self.libSharedMemoryVideoBuffers.getVideoFrameHeight(self.frame)
-          self.channels   = self.libSharedMemoryVideoBuffers.getVideoFrameChannels(self.frame)
+          self.frame_size     = self.libSharedMemoryVideoBuffers.getVideoFrameDataSize(self.frame)
+          self.width          = self.libSharedMemoryVideoBuffers.getVideoFrameWidth(self.frame)
+          self.height         = self.libSharedMemoryVideoBuffers.getVideoFrameHeight(self.frame)
+          self.channels       = self.libSharedMemoryVideoBuffers.getVideoFrameChannels(self.frame)
+          self.unix_timestamp = self.libSharedMemoryVideoBuffers.getVideoFrameTimestamp(self.frame)
   
           if (self.connect):
              pixels = self.libSharedMemoryVideoBuffers.getLocalMappingPointer(self.localMap, self.item)

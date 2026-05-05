@@ -33,6 +33,7 @@ struct VideoFrame
     //Shared Data
     //-----------------------------------------------------------------------------------------------------------
     volatile char locked;
+    volatile unsigned long unix_timestamp; //<- Unix epoch seconds, refreshed each copy_to_shared_memory call
     volatile int is_populated; //<- 1 when the frame's shared memory has been created, 0 otherwise
     char name[MAX_SHM_NAME+1];
     unsigned int width;
@@ -213,8 +214,9 @@ int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,unsigned int 
  * @param frame Pointer to the video frame structure.
  * @param src Pointer to the source data.
  * @param n Number of bytes to copy.
+ * @param unix_timestamp Unix timestamp (seconds since epoch) to associate with the frame. Pass 0 to use the current time.
  */
-void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n);
+void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, unsigned long unix_timestamp);
 
 /**
  * @brief Maps shared memory for a video frame.
@@ -242,6 +244,8 @@ unsigned long getVideoFrameDataSize(struct VideoFrame * frame);
 unsigned int getVideoFrameWidth(struct VideoFrame * frame);
 unsigned int getVideoFrameHeight(struct VideoFrame * frame);
 unsigned int getVideoFrameChannels(struct VideoFrame * frame);
+unsigned long getVideoFrameTimestamp(struct VideoFrame * frame);
+void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timestamp);
 
 
 
