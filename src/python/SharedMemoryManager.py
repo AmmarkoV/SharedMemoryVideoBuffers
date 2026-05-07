@@ -169,6 +169,7 @@ class SharedMemoryManager:
         self.channels   = channels
         self.frame_size = width * height * channels
         self.connect    = connect
+        self.unix_timestamp = 0 #<- If timestamp is zero we are not transmitting
 
         if (connect):
           self.client(descriptor=descriptor, frameName=frameName)
@@ -233,7 +234,7 @@ class SharedMemoryManager:
             raise RuntimeError("Failed to unlock video buffer after writing")
 
     def read_from_shared_memory(self):
-        print("read_from_shared_memory ")
+        #print("read_from_shared_memory ")
 
         #self.libSharedMemoryVideoBuffers.printSharedMemoryContextState(self.smc)
 
