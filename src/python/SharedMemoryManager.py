@@ -169,7 +169,6 @@ class SharedMemoryManager:
         self.channels   = channels
         self.frame_size = width * height * channels
         self.connect    = connect
-        self.unix_timestamp = 0 #<- If timestamp is zero we are not transmitting
 
         if (connect):
           self.client(descriptor=descriptor, frameName=frameName)
@@ -222,7 +221,12 @@ class SharedMemoryManager:
           print("An exception occurred in copy_to_shared_memory:", str(e))
 
     def get_timestamp(self):
-        return self.libSharedMemoryVideoBuffers.getVideoFrameTimestamp(self.frame)
+        res = self.libSharedMemoryVideoBuffers.startReadingFromVideoBufferPointer(self.frame)
+        if not res:
+            return None
+        ts = self.libSharedMemoryVideoBuffers.getVideoFrameTimestamp(self.frame)
+        self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer(self.frame)
+        return ts
 
     def set_timestamp(self, unix_timestamp=0):
         self.libSharedMemoryVideoBuffers.setVideoFrameTimestamp(self.frame, ctypes.c_ulong(unix_timestamp))
