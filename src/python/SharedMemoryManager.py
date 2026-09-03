@@ -219,6 +219,12 @@ class SharedMemoryManager:
           self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size, ctypes.c_ulong(unix_timestamp))
         except Exception as e:
           print("An exception occurred in copy_to_shared_memory:", str(e))
+        finally:
+          # Every C writer (client.c, publisher.c, publisher_data.c) pairs
+          # startWritingToVideoBufferPointer with stopWritingToVideoBufferPointer;
+          # without releasing it here the buffer stays locked forever and every
+          # write after the first times out in startWritingToVideoBufferPointer.
+          self.libSharedMemoryVideoBuffers.stopWritingToVideoBufferPointer(self.frame)
 
     def get_timestamp(self):
         res = self.libSharedMemoryVideoBuffers.startReadingFromVideoBufferPointer(self.frame)
