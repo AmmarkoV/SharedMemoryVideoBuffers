@@ -230,6 +230,20 @@ int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
 
 
 
+// Auto-timestamp for writers that pass 0: MICROSECONDS since the Unix epoch.
+// time(NULL) only advances once a second, so every frame published inside the
+// same second carried an identical timestamp and any consumer using it as frame
+// identity (e.g. a "skip what I already processed" limiter) throttled to 1 Hz.
+static unsigned long getUnixTimestampMicroseconds()
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME,&ts) != 0)
+        {
+            return (unsigned long) time(NULL) * 1000000;
+        }
+    return ((unsigned long) ts.tv_sec * 1000000) + ((unsigned long) ts.tv_nsec / 1000);
+}
+
 // Function to copy data from a buffer to the shared memory buffer
 void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, unsigned long unix_timestamp)
 {
@@ -241,7 +255,7 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, 
            {
              //fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,frame->client_address_space_data_pointer);
              memcpy(frame->client_address_space_data_pointer,src, n);
-             frame->unix_timestamp = (unix_timestamp != 0) ? unix_timestamp : (unsigned long) time(NULL);
+             frame->unix_timestamp = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
            } else { fprintf(stderr,"copy_to_shared_memory: Will not overflow target \n"); }
         } else { fprintf(stderr,"copy_to_shared_memory: No client address space data pointer \n"); }
     } else { fprintf(stderr,"copy_to_shared_memory: No Target VideoFrame our valid source \n"); }
@@ -482,7 +496,7 @@ void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timest
 {
   if (frame)
   {
-    frame->unix_timestamp = (unix_timestamp != 0) ? unix_timestamp : (unsigned long) time(NULL);
+    frame->unix_timestamp = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
   }
 }
 
