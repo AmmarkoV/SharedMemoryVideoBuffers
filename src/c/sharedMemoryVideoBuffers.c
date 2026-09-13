@@ -299,8 +299,24 @@ int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *c
   return 0;
 }
 
+// Runtime-gated so callers that poll this every frame don't pay for fprintf
+// unless the caller opted in. DEBUG_MESSAGES is a compile-time switch and
+// this function is called far too often (every frame, from several example
+// binaries and from the Python wrapper) to compile it in unconditionally.
+static int verboseEnabled()
+{
+    static int cached = -1;
+    if (cached == -1)
+    {
+        const char * env = getenv("SHMVB_VERBOSE");
+        cached = (env != NULL) && (strcmp(env,"1")==0 || strcmp(env,"true")==0);
+    }
+    return cached;
+}
+
 void printSharedMemoryContextState(struct SharedMemoryContext *context)
 {
+  if (!verboseEnabled()) { return; }
   if (context==0) { fprintf(stderr,"Empty Context\n"); return; }
   fprintf(stderr,"Populated Streams : %u\n",context->numberOfBuffers);
   for (int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)

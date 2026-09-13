@@ -4,6 +4,10 @@ import signal
 from ctypes import c_char_p, c_uint, c_void_p, c_int
 from pathlib import Path
 
+# See SharedMemoryManager.py - same toggle, off by default so the per-iteration
+# state dump doesn't dominate cost when frames are being polled quickly.
+_VERBOSE = os.environ.get("SHMVB_VERBOSE", "0") in ("1", "true", "True")
+
 class SharedMemoryServer:
     def __init__(self, shm_name="video_frames.shm", data_dir="data"):
         self.lib       = self.load_library()
@@ -132,7 +136,7 @@ class SharedMemoryServer:
                         self.map_remote_to_local(i)
 
                         if self.start_reading_from_video_buffer_pointer(frame):
-                            self.print_shared_memory_context_state()
+                            if _VERBOSE: self.print_shared_memory_context_state()
                             self.write_video_frame_to_image(str(filename), frame, self.get_local_mapping_pointer(i))
                             self.stop_reading_from_video_buffer_pointer(frame)
                         else:

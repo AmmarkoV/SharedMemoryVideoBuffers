@@ -1,5 +1,12 @@
+import os
 import ctypes
 import numpy as np
+#-------------------------------------------------------------------------------
+# Debug/status printing is off by default since copy_numpy_to_shared_memory and
+# read_from_shared_memory run on every frame - printing there at video framerates
+# costs more than the shared-memory copy it's supposedly logging. Set
+# SHMVB_VERBOSE=1 to get the old behaviour back.
+_VERBOSE = os.environ.get("SHMVB_VERBOSE", "0") in ("1", "true", "True")
 #-------------------------------------------------------------------------------
 class bcolors:
     HEADER = '\033[95m'
@@ -54,7 +61,7 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.destroyVideoFrame.restype  = ctypes.c_int
 
         self.libSharedMemoryVideoBuffers.map_frame_shared_memory.argtypes = [ctypes.c_void_p,ctypes.c_int]
-        self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = POINTER(ctypes.c_byte)
+        self.libSharedMemoryVideoBuffers.map_frame_shared_memory.restype  = POINTER(ctypes.c_ubyte)
 
         self.libSharedMemoryVideoBuffers.resolveFeedNameToID.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
         self.libSharedMemoryVideoBuffers.resolveFeedNameToID.restype  = ctypes.c_int
@@ -63,7 +70,7 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.mapRemoteToLocal.restype  = ctypes.c_int
 
         self.libSharedMemoryVideoBuffers.getLocalMappingPointer.argtypes = [ctypes.c_void_p,ctypes.c_int]
-        self.libSharedMemoryVideoBuffers.getLocalMappingPointer.restype  = POINTER(ctypes.c_byte)
+        self.libSharedMemoryVideoBuffers.getLocalMappingPointer.restype  = POINTER(ctypes.c_ubyte)
 
         self.libSharedMemoryVideoBuffers.printSharedMemoryContextState.argtypes = [ctypes.c_void_p] 
 
@@ -86,7 +93,7 @@ class SharedMemoryManager:
         self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer.restype  = ctypes.c_int
 
         self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.argtypes = [ctypes.c_void_p]
-        self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.restype  = POINTER(ctypes.c_byte)
+        self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer.restype  = POINTER(ctypes.c_ubyte)
 
         self.libSharedMemoryVideoBuffers.getVideoBufferPointer.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
         self.libSharedMemoryVideoBuffers.getVideoBufferPointer.restype  = ctypes.c_void_p
@@ -114,18 +121,18 @@ class SharedMemoryManager:
         path = descriptor.encode('utf-8')
         self.smc      = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
 
-        print("Creating descriptor ",frameName)
+        if _VERBOSE: print("Creating descriptor ",frameName)
         path = frameName.encode('utf-8')
         res = self.libSharedMemoryVideoBuffers.createVideoFrameMetaData(self.smc,path,self.width,self.height,self.channels)
         if res != 0:
             raise RuntimeError(f"createVideoFrameMetaData failed for stream '{frameName}'")
 
         #Get Video Buffer Pointer
-        print("Getting frame ",frameName)
+        if _VERBOSE: print("Getting frame ",frameName)
         self.frame = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
 
         #Map Video Buffer Pointer
-        print("Mapping video buffer memory ")
+        if _VERBOSE: print("Mapping video buffer memory ")
         res = self.libSharedMemoryVideoBuffers.map_frame_shared_memory(self.frame,1) #The 1 is very important, it copies the mmapped region to our context
         if not res:
             raise RuntimeError(f"map_frame_shared_memory failed for stream '{frameName}'")
@@ -134,8 +141,8 @@ class SharedMemoryManager:
         path = descriptor.encode('utf-8')  
         self.smc      = self.libSharedMemoryVideoBuffers.connectToSharedMemoryContextDescriptor(path)
         #Get Video Buffer Pointer
-        print("Getting frame ",frameName)
-        path = frameName.encode('utf-8')  
+        if _VERBOSE: print("Getting frame ",frameName)
+        path = frameName.encode('utf-8')
         self.frame    = self.libSharedMemoryVideoBuffers.getVideoBufferPointer(self.smc,path)
         if (self.frame==0):
             raise RuntimeError("Failed to find video buffer pointer")
@@ -154,12 +161,12 @@ class SharedMemoryManager:
         # Create a shared memory segment
         self.frameName = frameName
 
-        print("Loading libSharedMemoryVideoBuffers")
+        if _VERBOSE: print("Loading libSharedMemoryVideoBuffers")
         self.libSharedMemoryVideoBuffers = loadLibrary(libraryPath, forceUpdate=forceLibUpdate)
         self.link()
 
         #Connect to descriptor
-        print("Connecting to descriptor ",descriptor)
+        if _VERBOSE: print("Connecting to descriptor ",descriptor)
         self.smc      = None
         self.localMap = None
         self.item     = 0
@@ -175,11 +182,11 @@ class SharedMemoryManager:
         else:
           self.server(descriptor=descriptor, frameName=frameName)
 
-        print("Ready ")
+        if _VERBOSE: print("Ready ")
 
 
     def __del__(self):
-        print('Destructor called, unloading libSharedMemoryVideoBuffers')
+        if _VERBOSE: print('Destructor called, unloading libSharedMemoryVideoBuffers')
 
         # Guard against AttributeError if __init__ raised before all attributes were set
         if not hasattr(self, 'libSharedMemoryVideoBuffers'):
@@ -214,8 +221,7 @@ class SharedMemoryManager:
           channels = 1
           if (len(array.shape)>2):
                 channels = array.shape[2]
-          print(f"copy_to_shared_memory {size} bytes ({width} x {height} x {channels})")
-          print("copy_to_shared_memory ",size," bytes (",width * height * channels,")")
+          if _VERBOSE: print(f"copy_to_shared_memory {size} bytes ({width} x {height} x {channels})")
           self.libSharedMemoryVideoBuffers.copy_to_shared_memory(self.frame, array_ptr, size, ctypes.c_ulong(unix_timestamp))
         except Exception as e:
           print("An exception occurred in copy_to_shared_memory:", str(e))
@@ -259,20 +265,24 @@ class SharedMemoryManager:
   
           if (self.connect):
              pixels = self.libSharedMemoryVideoBuffers.getLocalMappingPointer(self.localMap, self.item)
-             print("Pixels pointer ",pixels)
-             #buffer = (ctypes.c_ubyte * self.frame_size).from_address(pixels)
-             #array = np.ctypeslib.as_array(buffer).reshape((self.height, self.width, self.channels)).astype(np.uint8)
-             array = np.ctypeslib.as_array(pixels, shape=(self.height, self.width, self.channels))#.copy()
           else:
              pixels = self.libSharedMemoryVideoBuffers.getVideoFrameDataPointer(self.frame)
-             array = np.ctypeslib.as_array(pixels, shape=(self.height, self.width, self.channels)).copy()
 
-          print("Reading %ux%u:%u (size %lu) frame at "% (self.width, self.height, self.channels, self.frame_size), pixels)
+          # getLocalMappingPointer/getVideoFrameDataPointer are declared as
+          # POINTER(c_ubyte), matching the actual (unsigned) pixel data, so this
+          # is already a uint8 view - no dtype cast (which forced a hidden copy
+          # via .astype) is needed. This is a zero-copy view straight into shared
+          # memory: it stays valid only until the next writer touches this
+          # buffer, so callers that need to keep the data across frames must
+          # copy it themselves.
+          array = np.ctypeslib.as_array(pixels, shape=(self.height, self.width, self.channels))
+
+          if _VERBOSE: print("Reading %ux%u:%u (size %lu) frame at "% (self.width, self.height, self.channels, self.frame_size), pixels)
 
           # Unlock Video Buffer after reading
           self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer(self.frame)
-           
-          return array.astype(np.uint8)
+
+          return array
         return None
 
 # Test

@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.10)
 project(SharedMemoryVideoBuffers)
 
 set(CMAKE_C_COMPILER gcc)
-set(CMAKE_C_FLAGS "-Wall -pthread -lrt -lm -g")
+set(CMAKE_C_FLAGS "-Wall -O2 -pthread -lrt -lm -g")
 set(CMAKE_SHARED_LINKER_FLAGS "-shared -fPIC -g")
 
 set(X11LIBS -lX11)

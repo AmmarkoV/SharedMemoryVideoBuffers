@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS        = -Wall -pthread -lrt -lm -g
+CFLAGS        = -Wall -O2 -pthread -lrt -lm -g
 LDFLAGS       = -shared -fPIC -g
 X11LIBS       = -lX11
 OBJ_DIR       = obj
