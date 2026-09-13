@@ -21,9 +21,12 @@ LIBRARY_OBJ   = $(addprefix $(OBJ_DIR)/, $(notdir $(LIBRARY_SRC:.c=.o)))
 LIBRARY_NAME = libSharedMemoryVideoBuffers.so
 TARGETS      = server client viewer consumer publisher $(LIBRARY_NAME)
 
-.PHONY: all clean
+.PHONY: all clean test
 
 all: $(TARGETS)
+
+test:
+	./test/run_tests.sh
 
 server: $(SERVER_OBJ)
 	$(CC) -o $@ $(CFLAGS) $^
@@ -53,4 +56,5 @@ install: $(LIBRARY_NAME)
 
 clean:
 	rm -f $(OBJ_DIR)/*.o $(TARGETS) $(LIBRARY_NAME)
+	rm -rf test/bin
 

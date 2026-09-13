@@ -70,6 +70,93 @@ void setup_signal_handlers()
     }
 }
 
+// How many physical slots (MAX_LOCAL_BUFFERS ceiling) each newly created stream
+// gets. Configurable via SHMVB_BUFFER_COUNT so existing deployments can opt out
+// (set to 1) without any code change; defaults to 2 (double buffering).
+static unsigned int getConfiguredBufferCount()
+{
+    static int cached = -1;
+    if (cached == -1)
+    {
+        int n = 2;
+        const char * env = getenv("SHMVB_BUFFER_COUNT");
+        if (env != NULL)
+        {
+            int parsed = atoi(env);
+            if (parsed >= 1 && parsed <= MAX_LOCAL_BUFFERS) { n = parsed; }
+        }
+        cached = n;
+    }
+    return (unsigned int) cached;
+}
+
+// ---------------------------------------------------------------------------
+// Per-thread bookkeeping of "which slot did *this* thread most recently latch
+// onto for VideoFrame X via startReadingFromVideoBufferPointer()". This can't
+// live in the shared VideoFrame struct itself: two reader processes (or two
+// threads) can legitimately be looking at two different slots at once, and
+// pointers/state written into shared memory by one process are meaningless to
+// another anyway (see the warning on client_address_space_data_pointer). A
+// small thread-local table keyed by the VideoFrame's address gives every
+// start/stop pair its own private slot index for free, with zero change to
+// any caller's code.
+// ---------------------------------------------------------------------------
+#define MAX_TLS_READ_ENTRIES 16
+
+struct tlsReadEntry
+{
+    const struct VideoFrame *vf;
+    unsigned int index;
+    int inUse;
+};
+
+static __thread struct tlsReadEntry tlsReadTable[MAX_TLS_READ_ENTRIES];
+
+static void tlsReadIndexStore(const struct VideoFrame *vf, unsigned int index)
+{
+    for (int i=0; i<MAX_TLS_READ_ENTRIES; i++)
+    {
+        if (!tlsReadTable[i].inUse || tlsReadTable[i].vf==vf)
+        {
+            tlsReadTable[i].vf    = vf;
+            tlsReadTable[i].index = index;
+            tlsReadTable[i].inUse = 1;
+            return;
+        }
+    }
+    // Table full (>16 concurrently in-progress reads on one thread - not seen
+    // in practice). Silently dropped; readers fall back to "latestIndex" in
+    // that case, which is still a complete frame, just not necessarily the
+    // exact one this read call started on.
+}
+
+static int tlsReadIndexLookup(const struct VideoFrame *vf, unsigned int *outIndex)
+{
+    for (int i=0; i<MAX_TLS_READ_ENTRIES; i++)
+    {
+        if (tlsReadTable[i].inUse && tlsReadTable[i].vf==vf)
+        {
+            *outIndex = tlsReadTable[i].index;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int tlsReadIndexLookupAndClear(const struct VideoFrame *vf, unsigned int *outIndex)
+{
+    for (int i=0; i<MAX_TLS_READ_ENTRIES; i++)
+    {
+        if (tlsReadTable[i].inUse && tlsReadTable[i].vf==vf)
+        {
+            *outIndex = tlsReadTable[i].index;
+            tlsReadTable[i].inUse = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 {
     if (exp==0) return 1;
@@ -155,7 +242,15 @@ unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,unsign
   {
      if ((lm->smc!=0) && (item<lm->smc->numberOfBuffers) )
      {
-      return (unsigned char *) lm->data[item];
+      struct VideoFrame *frame = &lm->smc->buffer[item];
+      if (frame->bufferCount <= 1)
+      {
+          return (unsigned char *) lm->data[item];
+      }
+
+      unsigned int index;
+      if (!tlsReadIndexLookup(frame,&index)) { index = frame->latestIndex; }
+      return (unsigned char *) lm->data[item] + ((size_t) index * frame->frame_size);
      }
   }
   return 0;
@@ -178,7 +273,7 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
                 {
                   //Only do the local mapping if we haven't already
                   localMap->data[item] = map_frame_shared_memory(frame,0);
-                  localMap->sz[item]   = frame->frame_size;
+                  localMap->sz[item]   = frame->frame_size * frame->bufferCount;
                   return 1;
                 } else
                 {
@@ -255,7 +350,10 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, 
            {
              //fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,frame->client_address_space_data_pointer);
              memcpy(frame->client_address_space_data_pointer,src, n);
-             frame->unix_timestamp = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
+             // Stamped per-slot (not a single shared field) so a reader holding
+             // an older slot never sees a timestamp that belongs to a newer,
+             // not-yet-visible-to-them frame.
+             frame->timestamps[frame->writeIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
            } else { fprintf(stderr,"copy_to_shared_memory: Will not overflow target \n"); }
         } else { fprintf(stderr,"copy_to_shared_memory: No client address space data pointer \n"); }
     } else { fprintf(stderr,"copy_to_shared_memory: No Target VideoFrame our valid source \n"); }
@@ -368,7 +466,18 @@ int create_frame_shared_memory(struct VideoFrame *frame)
 {
     if (frame==0) {return -1; }
 
-    fprintf(stderr,"Creating new video frame shared memory for %s\n",frame->name);
+    frame->bufferCount = getConfiguredBufferCount();
+    frame->writeIndex  = 0;
+    frame->latestIndex = 0;
+    for (unsigned int i=0; i<MAX_LOCAL_BUFFERS; i++)
+    {
+        frame->readerCount[i] = 0;
+        frame->timestamps[i]  = 0;
+    }
+
+    size_t totalSize = frame->frame_size * frame->bufferCount;
+
+    fprintf(stderr,"Creating new video frame shared memory for %s (%u slot(s))\n",frame->name,frame->bufferCount);
     int shm_fd = shm_open(frame->name, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1)
     {
@@ -377,7 +486,7 @@ int create_frame_shared_memory(struct VideoFrame *frame)
         return -1;
     }
 
-    if (ftruncate(shm_fd, frame->frame_size) == -1)
+    if (ftruncate(shm_fd, totalSize) == -1)
     {
         fprintf(stderr,RED "ftruncate frame\n" NORMAL);
         //perror("ftruncate frame");
@@ -385,8 +494,9 @@ int create_frame_shared_memory(struct VideoFrame *frame)
         return -1;
     }
 
-    fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,frame->frame_size);
-    frame->client_address_space_data_pointer = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,totalSize);
+    frame->mmap_base_pointer = (unsigned char*) mmap(NULL, totalSize, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    frame->client_address_space_data_pointer = frame->mmap_base_pointer;
     fprintf(stderr,"MMAP pointer for %s @ %p\n",frame->name,frame->client_address_space_data_pointer);
     if (frame->client_address_space_data_pointer == MAP_FAILED)
     {
@@ -407,7 +517,12 @@ unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideo
 {
     unsigned char * result = NULL;
     if (frame==0) { fprintf(stderr,"error: map_frame_shared_memory called without a valid video frame!\n"); return NULL; }
-    fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,frame->frame_size);
+
+    // frame->bufferCount was set by whichever process created this stream and
+    // lives in shared memory, so it's already correct here - map the WHOLE
+    // multi-slot region, not just one slot's worth.
+    size_t totalSize = frame->frame_size * frame->bufferCount;
+    fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,totalSize);
 
     int shm_fd = shm_open(frame->name, O_RDWR, 0666);
     if (shm_fd  == -1)
@@ -417,7 +532,7 @@ unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideo
         return NULL;
     }
 
-    result = (unsigned char*) mmap(NULL, frame->frame_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd , 0); //
+    result = (unsigned char*) mmap(NULL, totalSize, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd , 0); //
     if (result  == MAP_FAILED)
     {
         fprintf(stderr,RED "mmap frame\n" NORMAL);
@@ -428,6 +543,7 @@ unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideo
 
     if (copyToVideoFramePointer)
     {
+        frame->mmap_base_pointer = result;
         frame->client_address_space_data_pointer = result;
     }
 
@@ -458,7 +574,18 @@ unsigned char * getVideoFrameDataPointer(struct VideoFrame * frame)
 {
   if (frame)
   {
-    return frame->client_address_space_data_pointer;
+    if (frame->bufferCount <= 1)
+    {
+        return frame->client_address_space_data_pointer;
+    }
+
+    // Resolve to whichever slot *this thread* latched onto via a matching
+    // startReadingFromVideoBufferPointer() call; if none is on record (misuse,
+    // or the table overflowed - see MAX_TLS_READ_ENTRIES) fall back to the
+    // current published slot, which is still always a complete frame.
+    unsigned int index;
+    if (!tlsReadIndexLookup(frame,&index)) { index = frame->latestIndex; }
+    return frame->mmap_base_pointer + ((size_t) index * frame->frame_size);
   }
   return 0;
 }
@@ -503,7 +630,11 @@ unsigned long getVideoFrameTimestamp(struct VideoFrame * frame)
 {
   if (frame)
   {
-    return frame->unix_timestamp;
+    if (frame->bufferCount <= 1) { return frame->timestamps[0]; }
+
+    unsigned int index;
+    if (!tlsReadIndexLookup(frame,&index)) { index = frame->latestIndex; }
+    return frame->timestamps[index];
   }
   return 0;
 }
@@ -512,7 +643,9 @@ void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timest
 {
   if (frame)
   {
-    frame->unix_timestamp = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
+    // Only meaningful while a write is in flight (between start/stopWriting),
+    // matching how copy_to_shared_memory stamps the slot it just wrote.
+    frame->timestamps[frame->writeIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
   }
 }
 
@@ -648,14 +781,17 @@ int destroyVideoFrame(struct SharedMemoryContext* context, const char *streamNam
 
     struct VideoFrame *frame = &context->buffer[index];
 
-    if (frame->client_address_space_data_pointer != NULL)
+    if (frame->mmap_base_pointer != NULL)
     {
-        // Unmap the shared memory
-        if (munmap(frame->client_address_space_data_pointer, frame->frame_size) == -1)
+        // Unmap the shared memory (the full bufferCount*frame_size mapping,
+        // not just one slot - client_address_space_data_pointer may currently
+        // point at a slot other than the base after prior writes)
+        if (munmap(frame->mmap_base_pointer, frame->frame_size * frame->bufferCount) == -1)
         {
             debug_message("munmap frame");
             return EXIT_FAILURE;
         }
+        frame->mmap_base_pointer = NULL;
         frame->client_address_space_data_pointer = NULL;
     }
 
@@ -740,6 +876,54 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
         debug_message(RED "failed\n" NORMAL);
         return 0; // Buffer is already locked and we timed out waiting for it
     }
+
+    // Legacy single-buffer mode: client_address_space_data_pointer already
+    // points at the one and only slot, nothing else to do.
+    if (vf->bufferCount <= 1)
+    {
+        debug_message(GREEN "success\n" NORMAL);
+        return 1;
+    }
+
+    // Multi-buffering: claim a slot that isn't the currently-published one and
+    // has no active readers, so this write can never clobber a frame a reader
+    // is still copying out. `locked` (held for the remainder of this write)
+    // already serializes this search against any other writer, so a plain
+    // read-then-write of readerCount here is safe - no reader ever targets a
+    // slot other than the live vf->latestIndex, and that can't change while we
+    // hold the writer lock.
+    unsigned int chosen = vf->bufferCount; // sentinel: "not found yet"
+    attempts = 0;
+    while (attempts<ATTEMPTS_TO_LOCK_A_BUFFER)
+    {
+        for (unsigned int k=0; k<vf->bufferCount; k++)
+        {
+            unsigned int candidate = (vf->latestIndex + 1 + k) % vf->bufferCount;
+            if (candidate == vf->latestIndex) { continue; }
+            if (__sync_fetch_and_add(&vf->readerCount[candidate], 0) == 0)
+            {
+                chosen = candidate;
+                break;
+            }
+        }
+        if (chosen != vf->bufferCount) { break; }
+        usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
+        ++attempts;
+    }
+
+    if (chosen == vf->bufferCount)
+    {
+        // Every non-latest slot has a lingering reader - extremely unlikely at
+        // video framerates. Give up without touching any data (frame dropped,
+        // never corrupted) and release the writer lock we're holding.
+        __sync_lock_release(&vf->locked);
+        debug_message(RED "failed\n" NORMAL);
+        return 0;
+    }
+
+    vf->writeIndex = chosen;
+    vf->client_address_space_data_pointer = vf->mmap_base_pointer + ((size_t) chosen * vf->frame_size);
+
     debug_message(GREEN "success\n" NORMAL);
     return 1; // We have locked the buffer
 }
@@ -749,30 +933,75 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
 {
     if (vf==0) { return 0; }
     debug_message("stopWritingToVideoBufferPointer :");
+
+    if (vf->bufferCount > 1)
+    {
+        // Publish: make the just-written slot the one readers will latch onto.
+        // The barrier ensures the memcpy done under copy_to_shared_memory is
+        // visible to any thread that observes the new latestIndex.
+        __sync_synchronize();
+        vf->latestIndex = vf->writeIndex;
+        __sync_synchronize();
+    }
+
     __sync_lock_release(&vf->locked);
     debug_message(GREEN "success\n" NORMAL);
     return 1;
 }
 
-// Start reading from a video buffer
-// Readers do not acquire an exclusive lock — they only proceed if no writer holds it.
-// This allows multiple concurrent readers without blocking each other.
+// Start reading from a video buffer.
+// Legacy (bufferCount==1) mode: readers acquire no real lock, they only check
+// that no writer is currently active - this is the original design and still
+// carries the original torn-read risk if a writer starts mid-read.
+// Multi-buffered mode: the reader latches onto the current "latest" slot and
+// registers itself in readerCount[] for it, so the writer (which always skips
+// slots with readerCount>0) can never overwrite the data being read. The
+// load-refcount-recheck sequence below closes the narrow window where the
+// published slot changes between reading it and registering interest in it.
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
     if (vf==0) { return 0; }
     debug_message("startReadingFromVideoBufferPointer :");
-    if (__sync_fetch_and_add(&vf->locked, 0))
+
+    if (vf->bufferCount <= 1)
     {
-        debug_message(RED "failed\n" NORMAL);
-        return 0; // Buffer is locked by a writer
+        if (__sync_fetch_and_add(&vf->locked, 0))
+        {
+            debug_message(RED "failed\n" NORMAL);
+            return 0; // Buffer is locked by a writer
+        }
+        debug_message(GREEN "success\n" NORMAL);
+        return 1;
     }
+
+    unsigned int idx;
+    for (;;)
+    {
+        idx = vf->latestIndex;
+        __sync_fetch_and_add(&vf->readerCount[idx], 1);
+        if (vf->latestIndex == idx) { break; } // still current - we're protected
+        __sync_fetch_and_sub(&vf->readerCount[idx], 1); // stale, a publish raced us - retry
+    }
+
+    tlsReadIndexStore(vf, idx);
     debug_message(GREEN "success\n" NORMAL);
     return 1;
 }
 
-// Stop reading from a video buffer (no-op — readers do not hold the lock)
+// Stop reading from a video buffer. Legacy mode: no-op, matching the original
+// design (readers never held anything). Multi-buffered mode: releases the
+// refcount claimed by the matching startReadingFromVideoBufferPointer() call
+// on this thread.
 int stopReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
-    (void)vf;
+    if (vf==0) { return 0; }
+    if (vf->bufferCount > 1)
+    {
+        unsigned int idx;
+        if (tlsReadIndexLookupAndClear(vf,&idx))
+        {
+            __sync_fetch_and_sub(&vf->readerCount[idx], 1);
+        }
+    }
     return 1;
 }

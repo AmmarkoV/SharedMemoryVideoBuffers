@@ -24,6 +24,15 @@ extern "C"
 #define ATTEMPTS_TO_LOCK_A_BUFFER 1000
 #define SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS 10
 
+// Number of physical copies ("slots") kept per stream, so a writer never has to
+// overwrite data a reader might still be copying out (which is otherwise a real
+// torn-read race: the old design only checked "is a writer active?" once before
+// reading, with nothing stopping a writer from starting mid-read). The count
+// actually used per stream is chosen at creation time (env var SHMVB_BUFFER_COUNT,
+// default 2), clamped to this ceiling; 1 disables multi-buffering entirely and
+// reproduces the original single-buffer behavior byte-for-byte.
+#define MAX_LOCAL_BUFFERS 4
+
 #define DEBUG_MESSAGES 0
 
 /** @brief Structure to hold video frame metadata.
@@ -33,15 +42,28 @@ struct VideoFrame
     //Shared Data
     //-----------------------------------------------------------------------------------------------------------
     volatile char locked;
-    volatile unsigned long unix_timestamp; //<- Unix epoch MICROSECONDS, refreshed each copy_to_shared_memory call
     volatile int is_populated; //<- 1 when the frame's shared memory has been created, 0 otherwise
     char name[MAX_SHM_NAME+1];
     unsigned int width;
     unsigned int height;
     unsigned int channels;
-    size_t frame_size;
+    size_t frame_size; //<- size in bytes of ONE slot/buffer (NOT the total shared memory size when bufferCount>1)
+
+    // Multi-buffering: the shared memory backing this stream actually holds
+    // `bufferCount` copies of frame_size bytes each. A writer always fills a
+    // slot that isn't `latestIndex` and has no active readers, then publishes
+    // it; readers latch onto whatever `latestIndex` is and hold a refcount on
+    // it for the duration of their read, so the writer can never be filling a
+    // slot a reader is draining. bufferCount==1 disables all of this (no
+    // extra memory, no protection - identical to the original design).
+    unsigned int bufferCount;
+    unsigned int writeIndex;                                 //<- slot claimed by the writer; only meaningful while `locked`
+    volatile unsigned int latestIndex;                       //<- slot most recently published as a complete frame
+    volatile unsigned int readerCount[MAX_LOCAL_BUFFERS];     //<- active-reader refcount per slot
+    volatile unsigned long timestamps[MAX_LOCAL_BUFFERS];     //<- per-slot unix epoch MICROSECONDS, refreshed each copy_to_shared_memory call
     //-----------------------------------------------------------------------------------------------------------
-    unsigned char *client_address_space_data_pointer; //<- BE VERY CAREFUL THIS POINTS TO THE CLIENT DATA, and is an invalid pointer for other processes
+    unsigned char *client_address_space_data_pointer; //<- BE VERY CAREFUL: valid only in the process that mapped it. Points at the slot most recently claimed for writing (or slot 0, before any write).
+    unsigned char *mmap_base_pointer;                 //<- BE VERY CAREFUL: valid only in the process that mapped it. Base address of the whole bufferCount*frame_size mapping.
 };
 
 /** @brief Structure to hold local video frame pointers.
@@ -250,28 +272,39 @@ void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timest
 
 
 /**
- * @brief Starts writing to a video buffer.
+ * @brief Starts writing to a video buffer. When multi-buffering is enabled
+ * (see MAX_LOCAL_BUFFERS), this claims a free slot other than the one
+ * currently published as "latest" - copy_to_shared_memory()/getVideoFrameDataPointer()
+ * target that slot automatically until stopWritingToVideoBufferPointer() publishes it.
  * @param vf Pointer to the video frame structure.
- * @return 1 on success, 0 on failure.
+ * @return 1 on success, 0 on failure (timed out waiting for the writer lock, or - only
+ * possible under unusually heavy concurrent reader load - no free slot was available).
  */
 int startWritingToVideoBufferPointer(struct VideoFrame *vf);
 
 /**
- * @brief Stops writing to a video buffer.
+ * @brief Stops writing to a video buffer, publishing the slot just written as
+ * the new "latest" complete frame for readers.
  * @param vf Pointer to the video frame structure.
  * @return 1 on success, 0 on failure.
  */
 int stopWritingToVideoBufferPointer(struct VideoFrame *vf);
 
 /**
- * @brief Starts reading from a video buffer.
+ * @brief Starts reading from a video buffer. When multi-buffering is enabled,
+ * this latches onto whichever slot is currently published as "latest" and
+ * marks it as being read, so the writer will never fill it out from under the
+ * caller - getVideoFrameDataPointer()/getLocalMappingPointer() resolve to that
+ * exact slot for the calling thread until stopReadingFromVideoBufferPointer()
+ * is called. Must be paired with a matching stop call on the same thread.
  * @param vf Pointer to the video frame structure.
  * @return 1 on success, 0 on failure.
  */
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf);
 
 /**
- * @brief Stops reading from a video buffer.
+ * @brief Stops reading from a video buffer, releasing the slot claimed by the
+ * matching startReadingFromVideoBufferPointer() call on this thread.
  * @param vf Pointer to the video frame structure.
  * @return 1 on success, 0 on failure.
  */
