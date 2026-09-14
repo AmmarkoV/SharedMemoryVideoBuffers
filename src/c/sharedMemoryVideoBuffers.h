@@ -17,6 +17,7 @@ extern "C"
 #endif
 
 #include <stddef.h>
+#include <stdint.h>
 
 #define MAX_SHM_NAME 256
 #define MAX_NUMBER_OF_BUFFERS 10
@@ -32,6 +33,11 @@ extern "C"
 // default 2), clamped to this ceiling; 1 disables multi-buffering entirely and
 // reproduces the original single-buffer behavior byte-for-byte.
 #define MAX_LOCAL_BUFFERS 4
+
+// Maximum number of reads that can be in progress on one stream at the same
+// time (across all processes and threads). A start-reading call beyond this
+// fails (returns 0) instead of reading unprotected.
+#define MAX_READERS_PER_STREAM 32
 
 #define DEBUG_MESSAGES 0
 
@@ -52,14 +58,16 @@ struct VideoFrame
     // Multi-buffering: the shared memory backing this stream actually holds
     // `bufferCount` copies of frame_size bytes each. A writer always fills a
     // slot that isn't `latestIndex` and has no active readers, then publishes
-    // it; readers latch onto whatever `latestIndex` is and hold a refcount on
-    // it for the duration of their read, so the writer can never be filling a
-    // slot a reader is draining. bufferCount==1 disables all of this (no
-    // extra memory, no protection - identical to the original design).
+    // it; readers latch onto whatever `latestIndex` is and register themselves
+    // on it in `readers[]` for the duration of their read, so the writer can
+    // never be filling a slot a reader is draining. Registrations carry the
+    // reader's PID so the writer can reclaim ones left by readers that died
+    // mid-read. bufferCount==1 disables all of this (no extra memory, no
+    // protection - identical to the original design).
     unsigned int bufferCount;
     unsigned int writeIndex;                                 //<- slot claimed by the writer; only meaningful while `locked`
     volatile unsigned int latestIndex;                       //<- slot most recently published as a complete frame
-    volatile unsigned int readerCount[MAX_LOCAL_BUFFERS];     //<- active-reader refcount per slot
+    volatile uint64_t readers[MAX_READERS_PER_STREAM];       //<- active reads: (reader PID << 32) | slot, 0 = free entry
     volatile unsigned long timestamps[MAX_LOCAL_BUFFERS];     //<- per-slot unix epoch MICROSECONDS, refreshed each copy_to_shared_memory call
     //-----------------------------------------------------------------------------------------------------------
     unsigned char *client_address_space_data_pointer; //<- BE VERY CAREFUL: valid only in the process that mapped it. Points at the slot most recently claimed for writing (or slot 0, before any write).
@@ -237,8 +245,10 @@ int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,unsigned int 
  * @param src Pointer to the source data.
  * @param n Number of bytes to copy.
  * @param unix_timestamp Unix timestamp (microseconds since epoch) to associate with the frame. Pass 0 to use the current time.
+ * @return 1 on success, 0 if the data was rejected (e.g. n larger than the frame). A rejected copy
+ * inside start/stopWritingToVideoBufferPointer() is not published.
  */
-void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, unsigned long unix_timestamp);
+int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, unsigned long unix_timestamp);
 
 /**
  * @brief Maps shared memory for a video frame.
@@ -269,6 +279,16 @@ unsigned int getVideoFrameChannels(struct VideoFrame * frame);
 unsigned long getVideoFrameTimestamp(struct VideoFrame * frame);
 void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timestamp);
 
+/**
+ * @brief Changes the timestamp of the frame currently published as latest, without
+ * writing new pixel data. Takes the writer lock, so call it outside start/stopWritingToVideoBufferPointer().
+ * Readers that already latched onto that frame may see the new timestamp.
+ * @param frame Pointer to the video frame structure.
+ * @param unix_timestamp Microseconds to store. Pass 0 to use the current time.
+ * @return 1 on success, 0 if the writer lock could not be acquired.
+ */
+int setLatestVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timestamp);
+
 
 
 /**
@@ -284,7 +304,8 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf);
 
 /**
  * @brief Stops writing to a video buffer, publishing the slot just written as
- * the new "latest" complete frame for readers.
+ * the new "latest" complete frame for readers. If the last copy_to_shared_memory()
+ * of this write was rejected, nothing is published and the previous frame stays latest.
  * @param vf Pointer to the video frame structure.
  * @return 1 on success, 0 on failure.
  */
@@ -297,8 +318,11 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf);
  * caller - getVideoFrameDataPointer()/getLocalMappingPointer() resolve to that
  * exact slot for the calling thread until stopReadingFromVideoBufferPointer()
  * is called. Must be paired with a matching stop call on the same thread.
+ * Nested reads of the same frame on one thread are not supported: a second
+ * start releases the first one's protection.
  * @param vf Pointer to the video frame structure.
- * @return 1 on success, 0 on failure.
+ * @return 1 on success, 0 on failure (in multi-buffered mode: MAX_READERS_PER_STREAM
+ * reads already in progress on this stream, or this thread already reading too many frames).
  */
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf);
 

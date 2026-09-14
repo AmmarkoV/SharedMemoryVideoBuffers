@@ -22,6 +22,7 @@
 #define YELLOW  "\033[33m"      /* Yellow */
 
 #include <signal.h>
+#include <errno.h>
 #include <execinfo.h>
 #include <unistd.h>
 
@@ -106,55 +107,129 @@ static unsigned int getConfiguredBufferCount()
 struct tlsReadEntry
 {
     const struct VideoFrame *vf;
-    unsigned int index;
+    unsigned int index;        //<- slot this thread latched onto
+    unsigned int readerEntry;  //<- which vf->readers[] entry holds this read's registration
+    uint64_t registration;     //<- value stored in that entry, so stop only ever releases its own
     int inUse;
 };
 
 static __thread struct tlsReadEntry tlsReadTable[MAX_TLS_READ_ENTRIES];
 
-static void tlsReadIndexStore(const struct VideoFrame *vf, unsigned int index)
+static struct tlsReadEntry * tlsReadFind(const struct VideoFrame *vf)
 {
     for (int i=0; i<MAX_TLS_READ_ENTRIES; i++)
     {
-        if (!tlsReadTable[i].inUse || tlsReadTable[i].vf==vf)
-        {
-            tlsReadTable[i].vf    = vf;
-            tlsReadTable[i].index = index;
-            tlsReadTable[i].inUse = 1;
-            return;
-        }
+        if (tlsReadTable[i].inUse && tlsReadTable[i].vf==vf) { return &tlsReadTable[i]; }
     }
-    // Table full (>16 concurrently in-progress reads on one thread - not seen
-    // in practice). Silently dropped; readers fall back to "latestIndex" in
-    // that case, which is still a complete frame, just not necessarily the
-    // exact one this read call started on.
+    return NULL;
+}
+
+static struct tlsReadEntry * tlsReadFindFree()
+{
+    for (int i=0; i<MAX_TLS_READ_ENTRIES; i++)
+    {
+        if (!tlsReadTable[i].inUse) { return &tlsReadTable[i]; }
+    }
+    return NULL;
 }
 
 static int tlsReadIndexLookup(const struct VideoFrame *vf, unsigned int *outIndex)
 {
-    for (int i=0; i<MAX_TLS_READ_ENTRIES; i++)
+    struct tlsReadEntry *entry = tlsReadFind(vf);
+    if (entry == NULL) { return 0; }
+    *outIndex = entry->index;
+    return 1;
+}
+
+// Same idea for writers: which frames this thread currently holds the writer
+// lock on, so getVideoFrameDataPointer() can hand a writer the slot it claimed
+// and stopWritingToVideoBufferPointer() can skip publishing a slot whose
+// copy_to_shared_memory() was rejected.
+#define MAX_TLS_WRITE_ENTRIES 16
+
+struct tlsWriteEntry
+{
+    const struct VideoFrame *vf;
+    int aborted; //<- last copy_to_shared_memory() of this write was rejected
+    int inUse;
+};
+
+static __thread struct tlsWriteEntry tlsWriteTable[MAX_TLS_WRITE_ENTRIES];
+
+static struct tlsWriteEntry * tlsWriteFind(const struct VideoFrame *vf)
+{
+    for (int i=0; i<MAX_TLS_WRITE_ENTRIES; i++)
     {
-        if (tlsReadTable[i].inUse && tlsReadTable[i].vf==vf)
-        {
-            *outIndex = tlsReadTable[i].index;
-            return 1;
-        }
+        if (tlsWriteTable[i].inUse && tlsWriteTable[i].vf==vf) { return &tlsWriteTable[i]; }
+    }
+    return NULL;
+}
+
+static struct tlsWriteEntry * tlsWriteFindFree()
+{
+    for (int i=0; i<MAX_TLS_WRITE_ENTRIES; i++)
+    {
+        if (!tlsWriteTable[i].inUse) { return &tlsWriteTable[i]; }
+    }
+    return NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Reader registrations (VideoFrame.readers[]). Each in-progress read owns one
+// entry holding (reader PID << 32) | slot, so claiming, releasing and reclaiming
+// an entry are each a single atomic compare-and-swap. 0 marks a free entry (no
+// process has PID 0). The PID lets the writer free entries left behind by
+// readers that exited without calling stopReadingFromVideoBufferPointer().
+// ---------------------------------------------------------------------------
+static uint64_t packReaderRegistration(pid_t pid, unsigned int slot)
+{
+    return ((uint64_t) (uint32_t) pid << 32) | slot;
+}
+
+static int slotHasReaders(const struct VideoFrame *vf, unsigned int slot)
+{
+    for (unsigned int i=0; i<MAX_READERS_PER_STREAM; i++)
+    {
+        uint64_t registration = vf->readers[i];
+        if ((registration != 0) && ((unsigned int) (registration & 0xFFFFFFFF) == slot)) { return 1; }
     }
     return 0;
 }
 
-static int tlsReadIndexLookupAndClear(const struct VideoFrame *vf, unsigned int *outIndex)
+// Without this, one reader killed mid-read (crash, Ctrl-C, kill -9) pins its
+// slot forever and, with the default of 2 slots, the writer can never publish
+// again.
+static void reclaimDeadReaders(struct VideoFrame *vf)
 {
-    for (int i=0; i<MAX_TLS_READ_ENTRIES; i++)
+    for (unsigned int i=0; i<MAX_READERS_PER_STREAM; i++)
     {
-        if (tlsReadTable[i].inUse && tlsReadTable[i].vf==vf)
+        uint64_t registration = vf->readers[i];
+        if (registration == 0) { continue; }
+
+        pid_t pid = (pid_t) (registration >> 32);
+        // ESRCH: no such process. EPERM means it exists (another user's), so leave it.
+        if ((kill(pid,0) == -1) && (errno == ESRCH))
         {
-            *outIndex = tlsReadTable[i].index;
-            tlsReadTable[i].inUse = 0;
-            return 1;
+            if (__sync_bool_compare_and_swap(&vf->readers[i], registration, 0))
+            {
+                fprintf(stderr,"Reclaimed slot %u of stream %s from a dead reader (pid %d)\n",(unsigned int) (registration & 0xFFFFFFFF),vf->name,pid);
+            }
         }
     }
-    return 0;
+}
+
+static int claimReaderEntry(struct VideoFrame *vf, uint64_t registration)
+{
+    for (int pass=0; pass<2; pass++)
+    {
+        for (unsigned int i=0; i<MAX_READERS_PER_STREAM; i++)
+        {
+            if (__sync_bool_compare_and_swap(&vf->readers[i], 0, registration)) { return (int) i; }
+        }
+        // Table full - free entries left by dead readers and try once more
+        reclaimDeadReaders(vf);
+    }
+    return -1;
 }
 
 unsigned int simplePowPPM(unsigned int base,unsigned int exp)
@@ -340,8 +415,9 @@ static unsigned long getUnixTimestampMicroseconds()
 }
 
 // Function to copy data from a buffer to the shared memory buffer
-void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, unsigned long unix_timestamp)
+int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, unsigned long unix_timestamp)
 {
+  struct tlsWriteEntry *writeRecord = tlsWriteFind(frame);
   if ( (frame!=0) && (src!=0) && (n!=0) )
     {
         if (frame->client_address_space_data_pointer!=0)
@@ -354,9 +430,16 @@ void copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, 
              // an older slot never sees a timestamp that belongs to a newer,
              // not-yet-visible-to-them frame.
              frame->timestamps[frame->writeIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
+             if (writeRecord != NULL) { writeRecord->aborted = 0; }
+             return 1;
            } else { fprintf(stderr,"copy_to_shared_memory: Will not overflow target \n"); }
         } else { fprintf(stderr,"copy_to_shared_memory: No client address space data pointer \n"); }
     } else { fprintf(stderr,"copy_to_shared_memory: No Target VideoFrame our valid source \n"); }
+
+  // The claimed slot still holds an older frame - don't let the matching
+  // stopWritingToVideoBufferPointer() publish it as the latest one.
+  if (writeRecord != NULL) { writeRecord->aborted = 1; }
+  return 0;
 }
 
 int getSharedMemoryContextMAXBuffers()
@@ -471,8 +554,11 @@ int create_frame_shared_memory(struct VideoFrame *frame)
     frame->latestIndex = 0;
     for (unsigned int i=0; i<MAX_LOCAL_BUFFERS; i++)
     {
-        frame->readerCount[i] = 0;
         frame->timestamps[i]  = 0;
+    }
+    for (unsigned int i=0; i<MAX_READERS_PER_STREAM; i++)
+    {
+        frame->readers[i] = 0;
     }
 
     size_t totalSize = frame->frame_size * frame->bufferCount;
@@ -577,6 +663,14 @@ unsigned char * getVideoFrameDataPointer(struct VideoFrame * frame)
     if (frame->bufferCount <= 1)
     {
         return frame->client_address_space_data_pointer;
+    }
+
+    // A writer (between start/stopWritingToVideoBufferPointer() on this thread)
+    // gets the slot it claimed, so writing in place never touches the slot
+    // readers are using and is exactly what gets published.
+    if (tlsWriteFind(frame) != NULL)
+    {
+        return frame->mmap_base_pointer + ((size_t) frame->writeIndex * frame->frame_size);
     }
 
     // Resolve to whichever slot *this thread* latched onto via a matching
@@ -848,30 +942,25 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
 }
 
 // Start writing to a video buffer
+// Spin until the writer lock is ours, or give up after ATTEMPTS_TO_LOCK_A_BUFFER tries.
+static int acquireWriterLock(struct VideoFrame *vf)
+{
+    for (int attempts=0; attempts<ATTEMPTS_TO_LOCK_A_BUFFER; attempts++)
+    {
+      if (!__sync_lock_test_and_set(&vf->locked, 1)) { return 1; }
+      usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
+    }
+    return 0;
+}
+
 int startWritingToVideoBufferPointer(struct VideoFrame *vf)
 {
     if (vf==0) { return 0; }
 
     debug_message("startWritingToVideoBufferPointer :");
     int attempts = 0;
-    int result   = 0;
 
-    while (attempts<ATTEMPTS_TO_LOCK_A_BUFFER)
-    {
-      if (__sync_lock_test_and_set(&vf->locked, 1))
-      {
-        usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
-      } else
-      {
-          result = 1;
-          break;
-      }
-
-      ++attempts;
-    }
-
-
-    if (!result)
+    if (!acquireWriterLock(vf))
     {
         debug_message(RED "failed\n" NORMAL);
         return 0; // Buffer is already locked and we timed out waiting for it
@@ -885,12 +974,22 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
         return 1;
     }
 
+    struct tlsWriteEntry *writeRecord = tlsWriteFindFree();
+    if (writeRecord == NULL)
+    {
+        // This thread already holds the writer lock on too many frames; without
+        // a record getVideoFrameDataPointer() couldn't find the claimed slot.
+        __sync_lock_release(&vf->locked);
+        debug_message(RED "failed\n" NORMAL);
+        return 0;
+    }
+
     // Multi-buffering: claim a slot that isn't the currently-published one and
     // has no active readers, so this write can never clobber a frame a reader
     // is still copying out. `locked` (held for the remainder of this write)
     // already serializes this search against any other writer, so a plain
-    // read-then-write of readerCount here is safe - no reader ever targets a
-    // slot other than the live vf->latestIndex, and that can't change while we
+    // read of readers[] here is safe - no reader ever registers on a slot
+    // other than the live vf->latestIndex, and that can't change while we
     // hold the writer lock.
     unsigned int chosen = vf->bufferCount; // sentinel: "not found yet"
     attempts = 0;
@@ -900,13 +999,15 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
         {
             unsigned int candidate = (vf->latestIndex + 1 + k) % vf->bufferCount;
             if (candidate == vf->latestIndex) { continue; }
-            if (__sync_fetch_and_add(&vf->readerCount[candidate], 0) == 0)
+            if (!slotHasReaders(vf, candidate))
             {
                 chosen = candidate;
                 break;
             }
         }
         if (chosen != vf->bufferCount) { break; }
+        // Every candidate slot is busy - free any held by readers that died mid-read
+        reclaimDeadReaders(vf);
         usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
         ++attempts;
     }
@@ -924,6 +1025,10 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
     vf->writeIndex = chosen;
     vf->client_address_space_data_pointer = vf->mmap_base_pointer + ((size_t) chosen * vf->frame_size);
 
+    writeRecord->vf      = vf;
+    writeRecord->aborted = 0;
+    writeRecord->inUse   = 1;
+
     debug_message(GREEN "success\n" NORMAL);
     return 1; // We have locked the buffer
 }
@@ -934,7 +1039,13 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
     if (vf==0) { return 0; }
     debug_message("stopWritingToVideoBufferPointer :");
 
-    if (vf->bufferCount > 1)
+    struct tlsWriteEntry *writeRecord = tlsWriteFind(vf);
+    // A rejected copy left the claimed slot holding an older frame; publishing
+    // it would send readers back in time, so the previous frame stays latest.
+    int aborted = (writeRecord != NULL) && writeRecord->aborted;
+    if (writeRecord != NULL) { writeRecord->inUse = 0; }
+
+    if ((vf->bufferCount > 1) && (!aborted))
     {
         // Publish: make the just-written slot the one readers will latch onto.
         // The barrier ensures the memcpy done under copy_to_shared_memory is
@@ -949,14 +1060,25 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
     return 1;
 }
 
+// Re-stamp the frame currently published as latest, without writing new data.
+// Holding the writer lock keeps latestIndex from moving while we stamp it.
+int setLatestVideoFrameTimestamp(struct VideoFrame *vf, unsigned long unix_timestamp)
+{
+    if (vf==0) { return 0; }
+    if (!acquireWriterLock(vf)) { return 0; }
+    vf->timestamps[vf->latestIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
+    __sync_lock_release(&vf->locked);
+    return 1;
+}
+
 // Start reading from a video buffer.
 // Legacy (bufferCount==1) mode: readers acquire no real lock, they only check
 // that no writer is currently active - this is the original design and still
 // carries the original torn-read risk if a writer starts mid-read.
 // Multi-buffered mode: the reader latches onto the current "latest" slot and
-// registers itself in readerCount[] for it, so the writer (which always skips
-// slots with readerCount>0) can never overwrite the data being read. The
-// load-refcount-recheck sequence below closes the narrow window where the
+// registers itself in readers[] for it, so the writer (which always skips
+// slots with registered readers) can never overwrite the data being read. The
+// load-register-recheck sequence below closes the narrow window where the
 // published slot changes between reading it and registering interest in it.
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
@@ -974,34 +1096,60 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
         return 1;
     }
 
-    unsigned int idx;
-    for (;;)
+    // An earlier start on this frame from this thread that was never stopped
+    // is superseded rather than leaked.
+    stopReadingFromVideoBufferPointer(vf);
+
+    // Reserve this thread's record before registering in shared memory, so a
+    // registration can never exist without the record needed to release it.
+    struct tlsReadEntry *record = tlsReadFindFree();
+    if (record == NULL)
     {
-        idx = vf->latestIndex;
-        __sync_fetch_and_add(&vf->readerCount[idx], 1);
-        if (vf->latestIndex == idx) { break; } // still current - we're protected
-        __sync_fetch_and_sub(&vf->readerCount[idx], 1); // stale, a publish raced us - retry
+        debug_message(RED "failed (this thread is reading too many frames)\n" NORMAL);
+        return 0;
     }
 
-    tlsReadIndexStore(vf, idx);
+    pid_t pid = getpid();
+    unsigned int idx;
+    uint64_t registration;
+    int entry;
+    for (;;)
+    {
+        idx          = vf->latestIndex;
+        registration = packReaderRegistration(pid, idx);
+        entry        = claimReaderEntry(vf, registration);
+        if (entry == -1)
+        {
+            debug_message(RED "failed (too many concurrent readers)\n" NORMAL);
+            return 0;
+        }
+        if (vf->latestIndex == idx) { break; } // still current - we're protected
+        __sync_bool_compare_and_swap(&vf->readers[entry], registration, 0); // stale, a publish raced us - retry
+    }
+
+    record->vf           = vf;
+    record->index        = idx;
+    record->readerEntry  = (unsigned int) entry;
+    record->registration = registration;
+    record->inUse        = 1;
     debug_message(GREEN "success\n" NORMAL);
     return 1;
 }
 
 // Stop reading from a video buffer. Legacy mode: no-op, matching the original
 // design (readers never held anything). Multi-buffered mode: releases the
-// refcount claimed by the matching startReadingFromVideoBufferPointer() call
-// on this thread.
+// registration claimed by the matching startReadingFromVideoBufferPointer()
+// call on this thread.
 int stopReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
     if (vf==0) { return 0; }
-    if (vf->bufferCount > 1)
+    struct tlsReadEntry *record = tlsReadFind(vf);
+    if (record != NULL)
     {
-        unsigned int idx;
-        if (tlsReadIndexLookupAndClear(vf,&idx))
-        {
-            __sync_fetch_and_sub(&vf->readerCount[idx], 1);
-        }
+        // Compare-and-swap so only this read's own registration is released,
+        // even if the entry was cleared (stream re-created) in the meantime.
+        __sync_bool_compare_and_swap(&vf->readers[record->readerEntry], record->registration, 0);
+        record->inUse = 0;
     }
     return 1;
 }

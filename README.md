@@ -153,8 +153,22 @@ smm = SharedMemoryManager(
     frameName="stream1",
     connect=True            # True = read
 )
-frame = smm.read_from_shared_memory()   # returns numpy array
+frame = smm.read_from_shared_memory()   # returns numpy array (a copy), or None
+
+# Zero-copy read: view points straight into shared memory
+with smm.read_frame() as view:          # view is a read-only numpy array, or None
+    if view is not None:
+        edges = cv2.Canny(view, 100, 200)
+        # smm.width, smm.height, smm.channels, smm.unix_timestamp describe this frame
 ```
+
+`read_frame()` keeps the frame's slot protected until the block exits, so `view` can't change while you use it:
+
+- **Keep the block short.** With the default of 2 slots per stream, the publisher can write one more frame while a block is open and then blocks. Its `copy_numpy_to_shared_memory` raises if the block outlasts the lock timeout. Use `read_from_shared_memory()` for slow processing, or create the stream with a higher `SHMVB_BUFFER_COUNT` (up to 4).
+- **Don't use `view` after the block.** The writer will reuse the slot, so copy anything you want to keep (`view.copy()`).
+- **Don't read the same manager again inside the block.** `read_frame()`, `read_from_shared_memory()` and `get_timestamp()` raise `RuntimeError` there, because a second read would release the block's protection.
+- Exit the block on the same thread that entered it.
+- Streams created with `SHMVB_BUFFER_COUNT=1` have no protection.
 
 ---
 
