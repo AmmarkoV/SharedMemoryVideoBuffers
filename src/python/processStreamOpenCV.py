@@ -12,16 +12,13 @@ def eprint(*args, **kwargs):
 
 def sobel_filter(image):
     """
-    Apply Sobel edge detection to an image.
+    Apply Sobel edge detection to an image, returning a single-channel (grayscale) result.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
     sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     sobel_combined = cv2.sqrt(sobelx**2 + sobely**2)
-    gray = cv2.convertScaleAbs(sobel_combined)
-
-    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-    return image
+    return cv2.convertScaleAbs(sobel_combined)
 
 if __name__ == '__main__':
     input_stream_name = "street"

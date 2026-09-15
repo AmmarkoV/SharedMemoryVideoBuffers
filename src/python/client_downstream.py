@@ -1,6 +1,5 @@
 import time
 import cv2
-import numpy as np
 from SharedMemoryManager import SharedMemoryManager
 
 def main(streamName):
@@ -28,7 +27,6 @@ def main(streamName):
                 lastTimestamp = smm.unix_timestamp
                 if (view.shape[2]==4):
                    frame = cv2.cvtColor(view, cv2.COLOR_RGBA2GRAY)
-                   frame = np.transpose(frame, axes=None)
                 elif (view.shape[2]==3):
                    frame = cv2.cvtColor(view, cv2.COLOR_BGR2RGB)
                 else:

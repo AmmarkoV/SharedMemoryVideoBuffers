@@ -45,7 +45,7 @@ publisher: $(PUBLISHER_OBJ)
 	$(CC) -o $@ $(CFLAGS) $^ $(LDLIBS)
 
 viewer: $(VIEWER_OBJ)
-	$(CC) -o $@ $^ $(X11LIBS) $(LDLIBS)
+	$(CC) -o $@ $(CFLAGS) $^ $(X11LIBS) $(LDLIBS)
 
 $(LIBRARY_NAME): $(LIBRARY_OBJ)
 	$(CC) $(LDFLAGS)  $^ -o $@ $(CFLAGS) $(LDLIBS)

@@ -1,6 +1,6 @@
 /** @file publisher_data.c
  *  @brief  Example publisher of a generic (non-image) data stream: writes a struct sample_data
- *  worth of random bytes to the "data_stream1" stream about 9 times a second, forever.
+ *  worth of random bytes to the "data_stream1" stream about 9 times a second, until interrupted.
  *
  *  Creates the "video_frames.shm" context and the stream if needed.
  *
@@ -17,6 +17,7 @@
 #include <math.h>
 #include <time.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "sharedMemoryVideoBuffers.h"
 
@@ -29,9 +30,21 @@ struct sample_data
     float typeC[1000]; ///< Third block of samples
 };
 
+/** @brief Cleared by handle_signal() to leave the main loop. */
+static volatile int running = 1;
 
 /**
- * @brief Publishes random struct sample_data payloads on "data_stream1" until killed.
+ * @brief SIGINT/SIGTERM handler: asks the main loop to stop.
+ * @param sig Signal number (unused).
+ */
+static void handle_signal(int sig)
+{
+    (void)sig;
+    running = 0;
+}
+
+/**
+ * @brief Publishes random struct sample_data payloads on "data_stream1" until interrupted.
  * @param argc Unused.
  * @param argv Unused.
  * @return EXIT_FAILURE if the context or the stream can't be set up (the loop never ends otherwise).
@@ -40,6 +53,10 @@ int main(int argc, char *argv[])
 {
     const char *shm_name    = "video_frames.shm";
     const char *stream_name = "data_stream1";
+
+    signal(SIGINT,  handle_signal);
+    signal(SIGTERM, handle_signal);
+
     // Client process: create the context if nobody did yet (an existing one is kept)
     if (createSharedMemoryContextDescriptor(shm_name) == -1)
     {
@@ -77,7 +94,7 @@ int main(int argc, char *argv[])
 
     srand((unsigned int)time(NULL)); // Seed the random number generator
 
-    while (1)
+    while (running)
     {
      printSharedMemoryContextState(context);
      fprintf(stderr,"Write %lu bytes of dummy data\n",frame->frame_size);
