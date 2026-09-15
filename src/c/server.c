@@ -36,7 +36,7 @@ int main (int argc, char **argv)
     }
 
 
-    //Server creates and zeroes out all existing data..
+    //Server creates the context if needed (an existing compatible one keeps its streams)
     if (createSharedMemoryContextDescriptor(shm_name) == -1)
     {
         return EXIT_FAILURE;

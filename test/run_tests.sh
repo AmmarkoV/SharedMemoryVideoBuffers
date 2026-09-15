@@ -49,6 +49,7 @@ build torn_frame_reader
 build timestamp_consistency_writer
 build timestamp_consistency_reader
 build protocol_edge_cases
+build registry_edge_cases
 if ! "$CC" -O2 -Wall -shared -fPIC -I"$SRC_DIR" "$LIB_SRC" -o "$BIN_DIR/libSharedMemoryVideoBuffers.so" -pthread -lrt 2> "$LOG_DIR/build_library.log"
 then
     echo "BUILD FAILED: libSharedMemoryVideoBuffers.so"
@@ -61,7 +62,7 @@ run_case()
 {
     local label=$1 writer=$2 reader=$3 shm=$4 stream=$5 buffer_count=$6 must_pass=$7
 
-    rm -f "/dev/shm/$shm" "/dev/shm/$stream"
+    rm -f "/dev/shm/$shm"* # the context and its streams' "<context>.<stream>.<generation>" objects
 
     echo ""
     echo "=== $label (SHMVB_BUFFER_COUNT=${buffer_count:-<default: 2>}) ==="
@@ -80,7 +81,7 @@ run_case()
     grep -E "frames written|reads," "$LOG_DIR/${label}_writer.log" "$LOG_DIR/${label}_reader.log" 2>/dev/null | sed 's/^/    /'
     sed -n 's/^/    /p' "$LOG_DIR/${label}_reader.log" | grep -E "MISMATCH|TORN" | head -5
 
-    rm -f "/dev/shm/$shm" "/dev/shm/$stream"
+    rm -f "/dev/shm/$shm"* # the context and its streams' "<context>.<stream>.<generation>" objects
     unset SHMVB_BUFFER_COUNT
 
     if [ "$rstatus" -eq 1 ]; then
@@ -107,40 +108,42 @@ run_case "torn_legacy"     torn_frame_writer              torn_frame_reader     
 run_case "timestamp_default" timestamp_consistency_writer timestamp_consistency_reader   shmvb_test_ts.shm   ts   ""  yes
 run_case "timestamp_legacy"  timestamp_consistency_writer timestamp_consistency_reader   shmvb_test_ts.shm   ts   "1" no
 
-# Single-binary edge cases (reader crash recovery, in-place writers, rejected
-# copies, per-thread read tracking) - see protocol_edge_cases.c
-echo ""
-echo "=== protocol_edge_cases ==="
-rm -f /dev/shm/shmvb_test_edge.shm /dev/shm/edge
-"$BIN_DIR/protocol_edge_cases" shmvb_test_edge.shm edge > "$LOG_DIR/protocol_edge_cases.log" 2>&1
-edge_status=$?
-grep -E "^  (ok|FAIL)" "$LOG_DIR/protocol_edge_cases.log"
-rm -f /dev/shm/shmvb_test_edge.shm /dev/shm/edge
-if [ "$edge_status" -eq 0 ]; then
-    echo "  -> PASS"
-else
-    echo "  -> FAIL (see logs in $LOG_DIR)"
-    OVERALL_STATUS=1
-fi
+# run_single <label> <shm_prefix> <command...> - runs a self-checking test and
+# reports its ok/FAIL lines; <shm_prefix> matches every /dev/shm object it creates
+run_single()
+{
+    local label=$1 shm_prefix=$2
+    shift 2
 
-# Python bindings (src/python/SharedMemoryManager.py) - see test_shared_memory_manager.py
-echo ""
-echo "=== test_shared_memory_manager (python) ==="
-PYTHON="${PYTHON:-python3}"
-if ! "$PYTHON" -c "import numpy" 2> /dev/null; then
-    echo "  -> SKIPPED ($PYTHON with numpy not available)"
-else
-    rm -f /dev/shm/shmvb_test_py.shm /dev/shm/py
-    "$PYTHON" test_shared_memory_manager.py "$BIN_DIR/libSharedMemoryVideoBuffers.so" shmvb_test_py.shm py > "$LOG_DIR/test_shared_memory_manager.log" 2>&1
-    py_status=$?
-    grep -E "^  (ok|FAIL)" "$LOG_DIR/test_shared_memory_manager.log"
-    rm -f /dev/shm/shmvb_test_py.shm /dev/shm/py
-    if [ "$py_status" -eq 0 ]; then
+    echo ""
+    echo "=== $label ==="
+    rm -f "/dev/shm/$shm_prefix"*
+    "$@" > "$LOG_DIR/$label.log" 2>&1
+    local status=$?
+    grep -E "^  (ok|FAIL)" "$LOG_DIR/$label.log"
+    rm -f "/dev/shm/$shm_prefix"*
+    if [ "$status" -eq 0 ]; then
         echo "  -> PASS"
     else
         echo "  -> FAIL (see logs in $LOG_DIR)"
         OVERALL_STATUS=1
     fi
+}
+
+# Single-binary edge cases: reader crash recovery, in-place writers, rejected
+# copies, per-thread read tracking (protocol_edge_cases.c), and creating,
+# joining, replacing and destroying streams across processes (registry_edge_cases.c)
+run_single protocol_edge_cases shmvb_test_edge.shm "$BIN_DIR/protocol_edge_cases" shmvb_test_edge.shm edge
+run_single registry_edge_cases shmvb_test_reg_     "$BIN_DIR/registry_edge_cases"
+
+# Python bindings (src/python/SharedMemoryManager.py) - see test_shared_memory_manager.py
+PYTHON="${PYTHON:-python3}"
+if ! "$PYTHON" -c "import numpy" 2> /dev/null; then
+    echo ""
+    echo "=== test_shared_memory_manager ==="
+    echo "  -> SKIPPED ($PYTHON with numpy not available)"
+else
+    run_single test_shared_memory_manager shmvb_test_py.shm "$PYTHON" test_shared_memory_manager.py "$BIN_DIR/libSharedMemoryVideoBuffers.so" shmvb_test_py.shm py
 fi
 
 echo ""

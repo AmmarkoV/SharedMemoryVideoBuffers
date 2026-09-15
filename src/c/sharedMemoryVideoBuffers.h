@@ -41,15 +41,26 @@ extern "C"
 
 #define DEBUG_MESSAGES 0
 
-/** @brief Structure to hold video frame metadata.
+// Identifies a SharedMemoryContext laid out by this version of the library.
+// Bump SHMVB_CONTEXT_VERSION whenever a shared structure below changes, so
+// programs built against different layouts refuse to share memory instead of
+// silently reading each other's fields at the wrong offsets.
+#define SHMVB_CONTEXT_MAGIC   0x53484D56 /* "SHMV" */
+#define SHMVB_CONTEXT_VERSION 2
+
+/** @brief Structure to hold video frame metadata. Lives entirely in shared memory:
+ *  it must not contain pointers, which are only meaningful in one process.
  */
 struct VideoFrame
 {
     //Shared Data
     //-----------------------------------------------------------------------------------------------------------
     volatile char locked;
-    volatile int is_populated; //<- 1 when the frame's shared memory has been created, 0 otherwise
+    volatile int is_populated; //<- 1 while this slot holds a stream, 0 while it's free or being (re)created
     char name[MAX_SHM_NAME+1];
+    char backingName[MAX_SHM_NAME+1]; //<- shm object holding the pixels: "/<context>.<stream>.<generation>"
+    uint64_t generation;               //<- changes whenever this slot gets a new backing object, so processes notice a re-created stream
+    volatile int32_t ownerPid;         //<- process that created the stream; only it may destroy or resize it (anyone may once it has exited)
     unsigned int width;
     unsigned int height;
     unsigned int channels;
@@ -68,13 +79,15 @@ struct VideoFrame
     unsigned int writeIndex;                                 //<- slot claimed by the writer; only meaningful while `locked`
     volatile unsigned int latestIndex;                       //<- slot most recently published as a complete frame
     volatile uint64_t readers[MAX_READERS_PER_STREAM];       //<- active reads: (reader PID << 32) | slot, 0 = free entry
-    volatile unsigned long timestamps[MAX_LOCAL_BUFFERS];     //<- per-slot unix epoch MICROSECONDS, refreshed each copy_to_shared_memory call
+    volatile uint64_t timestamps[MAX_LOCAL_BUFFERS];         //<- per-slot unix epoch MICROSECONDS, refreshed each copy_to_shared_memory call
     //-----------------------------------------------------------------------------------------------------------
-    unsigned char *client_address_space_data_pointer; //<- BE VERY CAREFUL: valid only in the process that mapped it. Points at the slot most recently claimed for writing (or slot 0, before any write).
-    unsigned char *mmap_base_pointer;                 //<- BE VERY CAREFUL: valid only in the process that mapped it. Base address of the whole bufferCount*frame_size mapping.
+    // Where this process mapped the pixels is tracked by the library per process
+    // (see getVideoFrameDataPointer()), never in this shared structure.
 };
 
-/** @brief Structure to hold local video frame pointers.
+/** @brief Structure to hold local video frame pointers. Process-local.
+ *  Resolve pixel pointers with getLocalMappingPointer(): `data` can go stale
+ *  once the stream is re-created.
  */
 struct VideoFrameLocalMapping
 {
@@ -87,7 +100,12 @@ struct VideoFrameLocalMapping
  */
 struct SharedMemoryContext
 {
-   unsigned int numberOfBuffers;
+   uint32_t magic;                              //<- SHMVB_CONTEXT_MAGIC once fully initialized
+   uint32_t version;                            //<- SHMVB_CONTEXT_VERSION
+   char descriptorName[MAX_SHM_NAME+1];         //<- this context's shm name, used to namespace its streams' backing objects
+   volatile int32_t registryLockPid;            //<- process creating/destroying a stream right now, 0 = nobody
+   uint64_t nextGeneration;                     //<- next VideoFrame.generation to hand out (under the registry lock)
+   unsigned int numberOfBuffers;                //<- every stream is in a slot below this; slots below it can be free (check is_populated)
    struct VideoFrame buffer[MAX_NUMBER_OF_BUFFERS];
 };
 
@@ -114,7 +132,8 @@ int getSharedMemoryContextMAXBuffers();
 /**
  * @brief Gets the number of buffers in a shared memory context.
  * @param context Pointer to the shared memory context.
- * @return The number of buffers.
+ * @return One past the highest slot holding a stream. Destroying a stream doesn't move
+ * the others, so slots below this can be free: check remoteSharedMemoryContextVideoFrameIsPopulated().
  */
 int getSharedMemoryContextNumberOfBuffers(struct SharedMemoryContext *context);
 
@@ -144,7 +163,9 @@ void printSharedMemoryContextState(struct SharedMemoryContext *context);
 // Server process functions
 
 /**
- * @brief Creates a shared memory context descriptor (the server should do that).
+ * @brief Creates a shared memory context descriptor if needed. A context that already
+ * exists with this build's layout is left untouched, streams included; a missing one,
+ * or one laid out by an incompatible build, is (re)initialized empty.
  * @param path Path to the shared memory.
  * @return 0 on success, -1 on failure.
  */
@@ -156,19 +177,16 @@ int createSharedMemoryContextDescriptor(const char *path);
 /**
  * @brief Connects to a shared memory context descriptor.
  * @param path Path to the shared memory.
- * @return Pointer to the shared memory context.
+ * @return Pointer to the shared memory context, or NULL if it doesn't exist or was
+ * laid out by an incompatible build of this library.
  */
 struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path);
 
 /**
- * @brief Creates shared memory for a video frame.
- * @param frame Pointer to the video frame structure.
- * @return 0 on success, -1 on failure.
- */
-int create_frame_shared_memory(struct VideoFrame *frame);
-
-/**
- * @brief Creates metadata for a video frame.
+ * @brief Creates metadata for a video frame, or joins the stream if it already exists.
+ * An existing stream with the same size is joined as-is (nothing is reset). One with a
+ * different size is replaced only if this process created it or its creator has exited;
+ * otherwise this fails.
  * @param context Pointer to the shared memory context.
  * @param streamName Name of the stream.
  * @param width Width of the video frame.
@@ -181,7 +199,8 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
 
 
 /**
- * @brief Creates metadata for a generic data frame.
+ * @brief Creates metadata for a generic data frame. Joins or replaces an existing
+ * stream exactly like createVideoFrameMetaData().
  * @param context Pointer to the shared memory context.
  * @param streamName Name of the stream.
  * @param dataSize Size of data in bytes for the data frame.
@@ -191,7 +210,8 @@ int createGenericMetaData(struct SharedMemoryContext* context,const char * strea
 
 
 /**
- * @brief Destroys a video frame.
+ * @brief Destroys a video frame. Only the process that created the stream may do this,
+ * or any process once the creator has exited. Other streams keep their slots.
  * @param context Pointer to the shared memory context.
  * @param streamName Name of the stream.
  * @return 0 on success, -1 on failure.
@@ -205,7 +225,7 @@ int destroyVideoFrame(struct SharedMemoryContext* context,const char * streamNam
 struct VideoFrameLocalMapping * allocateLocalMapping();
 
 /**
- * @brief Frees local mapping for video frames.
+ * @brief Frees local mapping for video frames, unmapping every item still mapped.
  * @param lm Pointer to the local mapping structure.
  * @return 1 on success, 0 on failure.
  */
@@ -218,16 +238,18 @@ int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
  * @brief Gets the pointer to the local mapping for a video frame.
  * @param lm Pointer to the local mapping structure.
  * @param item Index of the video frame.
- * @return Pointer to the local mapping.
+ * @return Pointer to the frame's pixels, as getVideoFrameDataPointer() resolves them, or NULL
+ * if the item was never mapped with mapRemoteToLocal() or its slot holds no stream.
  */
 unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm, unsigned int item);
 
 /**
- * @brief Maps a remote video frame to local memory.
+ * @brief Maps a remote video frame to local memory. Calling it again after the stream
+ * was re-created is harmless: reads follow a re-created stream automatically.
  * @param context Pointer to the shared memory context.
  * @param localMap Pointer to the local mapping structure.
  * @param item Index of the video frame to map.
- * @return 1 on success, 0 on failure.
+ * @return 1 on success, 0 on failure (including when the slot holds no stream).
  */
 int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocalMapping * localMap, unsigned int item);
 
@@ -248,13 +270,14 @@ int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,unsigned int 
  * @return 1 on success, 0 if the data was rejected (e.g. n larger than the frame). A rejected copy
  * inside start/stopWritingToVideoBufferPointer() is not published.
  */
-int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, unsigned long unix_timestamp);
+int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, uint64_t unix_timestamp);
 
 /**
- * @brief Maps shared memory for a video frame.
+ * @brief Maps shared memory for a video frame into this process, if it isn't already.
+ * Optional: reads and writes map the stream on demand.
  * @param frame Pointer to the video frame structure.
- * @param copyToVideoFramePointer Flag to indicate whether to copy to video frame pointer.
- * @return Pointer to the mapped shared memory.
+ * @param copyToVideoFramePointer Ignored; kept for compatibility.
+ * @return Start of this process's mapping (all bufferCount slots), or NULL on failure.
  */
 unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideoFramePointer);
 
@@ -270,14 +293,21 @@ struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, cons
 
 
 
+/**
+ * @brief Gets this process's pointer to the frame's pixels: the slot claimed for writing
+ * between start/stopWritingToVideoBufferPointer(), the slot latched onto between
+ * start/stopReadingFromVideoBufferPointer(), or (unprotected) the latest slot otherwise.
+ * @param frame Pointer to the video frame structure.
+ * @return Pointer to frame_size bytes, or NULL if the slot holds no stream.
+ */
 unsigned char * getVideoFrameDataPointer(struct VideoFrame * frame);
 
 unsigned long getVideoFrameDataSize(struct VideoFrame * frame);
 unsigned int getVideoFrameWidth(struct VideoFrame * frame);
 unsigned int getVideoFrameHeight(struct VideoFrame * frame);
 unsigned int getVideoFrameChannels(struct VideoFrame * frame);
-unsigned long getVideoFrameTimestamp(struct VideoFrame * frame);
-void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timestamp);
+uint64_t getVideoFrameTimestamp(struct VideoFrame * frame);
+void setVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timestamp);
 
 /**
  * @brief Changes the timestamp of the frame currently published as latest, without
@@ -287,7 +317,7 @@ void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timest
  * @param unix_timestamp Microseconds to store. Pass 0 to use the current time.
  * @return 1 on success, 0 if the writer lock could not be acquired.
  */
-int setLatestVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timestamp);
+int setLatestVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timestamp);
 
 
 
@@ -297,8 +327,9 @@ int setLatestVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_t
  * currently published as "latest" - copy_to_shared_memory()/getVideoFrameDataPointer()
  * target that slot automatically until stopWritingToVideoBufferPointer() publishes it.
  * @param vf Pointer to the video frame structure.
- * @return 1 on success, 0 on failure (timed out waiting for the writer lock, or - only
- * possible under unusually heavy concurrent reader load - no free slot was available).
+ * @return 1 on success, 0 on failure (timed out waiting for the writer lock, the stream
+ * no longer exists, or - only possible under unusually heavy concurrent reader load - no
+ * free slot was available).
  */
 int startWritingToVideoBufferPointer(struct VideoFrame *vf);
 
@@ -321,8 +352,12 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf);
  * Nested reads of the same frame on one thread are not supported: a second
  * start releases the first one's protection.
  * @param vf Pointer to the video frame structure.
- * @return 1 on success, 0 on failure (in multi-buffered mode: MAX_READERS_PER_STREAM
- * reads already in progress on this stream, or this thread already reading too many frames).
+ * If the stream was destroyed and re-created since this process last used it, the
+ * read follows the new stream; memory of the old one stays mapped until reads and
+ * writes still using it in this process have stopped.
+ * @return 1 on success, 0 on failure (the slot holds no stream, a writer holds a
+ * single-buffered stream, MAX_READERS_PER_STREAM reads are already in progress on this
+ * stream, or this thread is already reading too many frames).
  */
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf);
 

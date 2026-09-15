@@ -12,12 +12,15 @@
                       error that names it
    copy_validation  - copy_numpy_to_shared_memory() writes non-contiguous arrays in
                       logical order and rejects arrays of the wrong dtype or size
+   restarted_stream - a reader follows a stream that its publisher re-created at a
+                      new size, even when it lands in a different slot
 
 Exit code: 0 = all checks passed, 2 = a check failed, 1 = setup error.
 
 Usage: test_shared_memory_manager.py <libSharedMemoryVideoBuffers.so> [shm_name] [stream_name]
 """
 import ctypes
+import gc
 import os
 import sys
 
@@ -137,8 +140,22 @@ def main():
           "copy_validation: wrong size raises ValueError")
     check(np.all(reader.read_from_shared_memory() == 9), "copy_validation: rejected arrays don't change the published frame")
 
+    # restarted_stream - the publisher goes away (destroying its stream), another
+    # stream takes the freed slot, and the publisher comes back at twice the width
+    del writer
+    gc.collect()
+    blocker = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=streamName + "_blocker",
+                                  width=WIDTH, height=HEIGHT, channels=CHANNELS)
+    writer = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=streamName,
+                                 width=WIDTH * 2, height=HEIGHT, channels=CHANNELS)
+    writer.copy_numpy_to_shared_memory(np.full((HEIGHT, WIDTH * 2, CHANNELS), 40, dtype=np.uint8))
+    restarted = reader.read_from_shared_memory()
+    check(restarted is not None and restarted.shape == (HEIGHT, WIDTH * 2, CHANNELS) and np.all(restarted == 40),
+          "restarted_stream: a reader follows the re-created stream to its new slot and size")
+
     del reader
     del writer
+    del blocker
     if os.path.exists("/dev/shm/" + shmName):
         os.remove("/dev/shm/" + shmName)
 

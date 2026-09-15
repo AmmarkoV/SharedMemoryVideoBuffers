@@ -90,7 +90,7 @@ int main()
         unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
         if (buffer!=0)
         {
-         memcpy(buffer, frame->client_address_space_data_pointer, frame->frame_size);
+         memcpy(buffer, getVideoFrameDataPointer(frame), frame->frame_size);
          stopReadingFromVideoBufferPointer(frame);
          free(buffer);
 
@@ -178,7 +178,7 @@ int main()
     {
         if (image_data!=0)
         {
-         memcpy(image_data, frame->client_address_space_data_pointer, frame->frame_size);
+         memcpy(image_data, getVideoFrameDataPointer(frame), frame->frame_size);
          stopReadingFromVideoBufferPointer(frame);
 
          WIDTH   = frame->width;

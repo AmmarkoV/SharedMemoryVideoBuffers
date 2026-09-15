@@ -109,7 +109,7 @@ int main(int argc, char *argv[])
     if (!(frame = freshStream(ctx, stream_name))) { return 1; }
     if (!startWritingToVideoBufferPointer(frame)) { return 1; }
     unsigned char *writePtr = getVideoFrameDataPointer(frame);
-    check(writePtr == frame->mmap_base_pointer + ((size_t) frame->writeIndex * frame->frame_size),
+    check(writePtr == map_frame_shared_memory(frame,1) + ((size_t) frame->writeIndex * frame->frame_size),
           "inplace_writer: getVideoFrameDataPointer() returns the claimed write slot");
     check(frame->writeIndex != frame->latestIndex, "inplace_writer: claimed write slot is not the published slot");
     memset(writePtr, 42, frame->frame_size);
@@ -137,24 +137,44 @@ int main(int argc, char *argv[])
     stopReadingFromVideoBufferPointer(frame);
     check(countSuccessfulWrites(frame, 5) == 5, "nested_read: no reader left registered");
 
-    // 5. read_table_full - more distinct frames than one thread can track at
-    // once. These are process-local VideoFrames with no mapped data: starting
-    // and stopping reads/writes on them never touches pixel memory.
-    #define LOCAL_FRAMES 64
-    static struct VideoFrame localFrames[LOCAL_FRAMES];
-    for (int i=0; i<LOCAL_FRAMES; i++) { localFrames[i].bufferCount = 2; localFrames[i].frame_size = 1; }
-    for (int i=0; i<LOCAL_FRAMES; i++) { startReadingFromVideoBufferPointer(&localFrames[i]); }
-    for (int i=0; i<LOCAL_FRAMES; i++) { stopReadingFromVideoBufferPointer(&localFrames[i]); }
+    // 5. read_table_full - more streams than one thread can track reads of at
+    // once (two contexts' worth, since one context holds MAX_NUMBER_OF_BUFFERS)
+    enum { TABLE_CONTEXTS = 2 };
+    struct SharedMemoryContext *tableCtx[TABLE_CONTEXTS];
+    char tableShm[TABLE_CONTEXTS][64];
+    struct VideoFrame *tableFrames[TABLE_CONTEXTS * MAX_NUMBER_OF_BUFFERS];
+    int tableFrameCount = 0;
+    for (int c=0; c<TABLE_CONTEXTS; c++)
+    {
+        snprintf(tableShm[c], sizeof(tableShm[c]), "%s.table%d", shm_name, c);
+        shm_unlink(tableShm[c]);
+        if (createSharedMemoryContextDescriptor(tableShm[c]) == -1) { return 1; }
+        if (!(tableCtx[c] = connectToSharedMemoryContextDescriptor(tableShm[c]))) { return 1; }
+        for (int s=0; s<MAX_NUMBER_OF_BUFFERS; s++)
+        {
+            char name[32];
+            snprintf(name, sizeof(name), "table%d", s);
+            if (createVideoFrameMetaData(tableCtx[c], name, 4, 4, 1) != 0) { return 1; }
+            tableFrames[tableFrameCount++] = getVideoBufferPointer(tableCtx[c], name);
+        }
+    }
+    for (int i=0; i<tableFrameCount; i++) { startReadingFromVideoBufferPointer(tableFrames[i]); }
+    for (int i=0; i<tableFrameCount; i++) { stopReadingFromVideoBufferPointer(tableFrames[i]); }
     int allWritable = 1;
-    for (int i=0; i<LOCAL_FRAMES; i++)
+    for (int i=0; i<tableFrameCount; i++)
     {
         for (int w=0; w<2; w++)
         {
-            if (!startWritingToVideoBufferPointer(&localFrames[i])) { allWritable = 0; break; }
-            stopWritingToVideoBufferPointer(&localFrames[i]);
+            if (!startWritingToVideoBufferPointer(tableFrames[i])) { allWritable = 0; break; }
+            stopWritingToVideoBufferPointer(tableFrames[i]);
         }
     }
     check(allWritable, "read_table_full: no reader left registered on any frame");
+    for (int c=0; c<TABLE_CONTEXTS; c++)
+    {
+        for (int s=0; s<MAX_NUMBER_OF_BUFFERS; s++) { char name[32]; snprintf(name, sizeof(name), "table%d", s); destroyVideoFrame(tableCtx[c], name); }
+        shm_unlink(tableShm[c]);
+    }
 
     destroyVideoFrame(ctx, stream_name);
     shm_unlink(shm_name);

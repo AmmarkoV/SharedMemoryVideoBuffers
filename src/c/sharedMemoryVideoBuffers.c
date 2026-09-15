@@ -8,12 +8,15 @@
 
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <limits.h>
 #include <time.h>
+#include <pthread.h>
 
 #define NORMAL   "\033[0m"
 #define BLACK   "\033[30m"      /* Black */
@@ -23,52 +26,20 @@
 
 #include <signal.h>
 #include <errno.h>
-#include <execinfo.h>
 #include <unistd.h>
 
 #include <stdarg.h>
 
-void debug_message(const char *format, ...)
+static void debug_message(const char *format, ...)
 {
     #if DEBUG_MESSAGES
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);
     va_end(args);
+    #else
+    (void) format;
     #endif // DEBUG_MESSAGES
-}
-
-
-void handle_segfault(int sig)
-{
-    void *array[100];
-    size_t size;
-
-    // get void*'s for all entries on the stack
-    size = backtrace(array, 100);
-
-    // print out all the frames to stderr
-    fprintf(stderr, "Error: signal %d:\n", sig);
-    backtrace_symbols_fd(array, size, STDERR_FILENO);
-    //exit(1);
-    abort();
-}
-
-void setup_signal_handlers()
-{
-    struct sigaction sa;
-
-    sa.sa_handler = handle_segfault;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
-
-    if (sigaction(SIGSEGV, &sa, NULL) == -1)
-    {
-        debug_message("sigaction");
-        //perror("sigaction");
-        //exit(EXIT_FAILURE);
-        abort();
-    }
 }
 
 // How many physical slots (MAX_LOCAL_BUFFERS ceiling) each newly created stream
@@ -91,23 +62,189 @@ static unsigned int getConfiguredBufferCount()
     return (unsigned int) cached;
 }
 
+// A PID that no longer exists. ESRCH: no such process. EPERM means it exists
+// but belongs to another user, so it counts as alive.
+static int processIsDead(pid_t pid)
+{
+    return (pid > 0) && (kill(pid,0) == -1) && (errno == ESRCH);
+}
+
+// ---------------------------------------------------------------------------
+// Process-local mappings of stream pixels. Shared memory is mapped at a
+// different address in every process, so where *this* process mapped a stream
+// is kept here - keyed by the VideoFrame's address in this process - and never
+// in the shared VideoFrame itself. A mapping belongs to one generation of the
+// stream: once the stream is destroyed and re-created, the next read or write
+// maps the new backing object, and the old mapping is retired and unmapped as
+// soon as no read or write in this process still uses it.
+// ---------------------------------------------------------------------------
+#define MAX_LOCAL_STREAM_MAPPINGS 64
+
+struct localStreamMapping
+{
+    const struct VideoFrame *vf;  //<- shared slot this maps, at its address in this process
+    uint64_t generation;          //<- incarnation of the stream `base` maps
+    unsigned char *base;          //<- bufferCount * frameSize bytes
+    size_t size;
+    size_t frameSize;
+    unsigned int bufferCount;
+    int activeUses;               //<- reads/writes in progress in this process that use `base`
+    int retired;                  //<- superseded or released: unmap once activeUses reaches 0
+    int inUse;
+};
+
+static struct localStreamMapping localMappings[MAX_LOCAL_STREAM_MAPPINGS];
+static pthread_mutex_t localMappingsLock = PTHREAD_MUTEX_INITIALIZER;
+
+// Caller holds localMappingsLock.
+static void retireMappingLocked(struct localStreamMapping *mapping)
+{
+    mapping->retired = 1;
+    if (mapping->activeUses == 0)
+    {
+        munmap(mapping->base, mapping->size);
+        memset(mapping, 0, sizeof(struct localStreamMapping));
+    }
+}
+
+// Caller holds localMappingsLock. Returns this process's mapping of the stream
+// currently in vf's slot, mapping it first if needed, or NULL if the slot holds
+// no complete stream.
+static struct localStreamMapping * currentMappingLocked(const struct VideoFrame *vf)
+{
+    struct localStreamMapping *current = NULL;
+    for (int i=0; i<MAX_LOCAL_STREAM_MAPPINGS; i++)
+    {
+        if (localMappings[i].inUse && !localMappings[i].retired && localMappings[i].vf==vf) { current = &localMappings[i]; break; }
+    }
+    if ((current != NULL) && vf->is_populated && (current->generation == vf->generation)) { return current; }
+    if (current != NULL) { retireMappingLocked(current); } // the stream was destroyed or re-created
+
+    // Snapshot the stream's layout. Registration marks a slot unpopulated, then
+    // changes its generation, then its other fields, then marks it populated -
+    // so a slot that is populated and keeps its generation while we copy is stable.
+    char backingName[MAX_SHM_NAME+1];
+    uint64_t generation;
+    size_t frameSize;
+    unsigned int bufferCount;
+    for (int attempts=0; ; attempts++)
+    {
+        generation = vf->generation;
+        int populated = vf->is_populated;
+        memcpy(backingName, vf->backingName, sizeof(backingName));
+        backingName[MAX_SHM_NAME] = 0;
+        frameSize   = vf->frame_size;
+        bufferCount = vf->bufferCount;
+        if (!populated) { return NULL; }
+        if (vf->generation == generation) { break; }
+        if (attempts >= ATTEMPTS_TO_LOCK_A_BUFFER) { return NULL; }
+    }
+    if ((bufferCount == 0) || (bufferCount > MAX_LOCAL_BUFFERS) || (frameSize == 0) || (frameSize > SIZE_MAX / bufferCount)) { return NULL; }
+    size_t size = frameSize * bufferCount;
+
+    struct localStreamMapping *freeEntry = NULL;
+    for (int i=0; i<MAX_LOCAL_STREAM_MAPPINGS; i++)
+    {
+        if (!localMappings[i].inUse) { freeEntry = &localMappings[i]; break; }
+    }
+    if (freeEntry == NULL)
+    {
+        fprintf(stderr,"Can't map stream %s: this process already maps %u streams\n",vf->name,MAX_LOCAL_STREAM_MAPPINGS);
+        return NULL;
+    }
+
+    int shm_fd = shm_open(backingName, O_RDWR, 0666);
+    if (shm_fd == -1) { return NULL; } // destroyed since the snapshot
+
+    // Never map more than the object holds: touching memory past its end is SIGBUS
+    struct stat objectStat;
+    if ((fstat(shm_fd, &objectStat) == -1) || ((size_t) objectStat.st_size < size)) { close(shm_fd); return NULL; }
+
+    unsigned char *base = (unsigned char*) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    close(shm_fd);
+    if (base == MAP_FAILED)
+    {
+        fprintf(stderr,RED "mmap frame %s\n" NORMAL,backingName);
+        return NULL;
+    }
+
+    freeEntry->vf          = vf;
+    freeEntry->generation  = generation;
+    freeEntry->base        = base;
+    freeEntry->size        = size;
+    freeEntry->frameSize   = frameSize;
+    freeEntry->bufferCount = bufferCount;
+    freeEntry->activeUses  = 0;
+    freeEntry->retired     = 0;
+    freeEntry->inUse       = 1;
+    return freeEntry;
+}
+
+// Mapping for a read or write: stays mapped until the matching endMappingUse().
+static struct localStreamMapping * beginMappingUse(const struct VideoFrame *vf)
+{
+    pthread_mutex_lock(&localMappingsLock);
+    struct localStreamMapping *mapping = currentMappingLocked(vf);
+    if (mapping != NULL) { mapping->activeUses++; }
+    pthread_mutex_unlock(&localMappingsLock);
+    return mapping;
+}
+
+static void endMappingUse(struct localStreamMapping *mapping)
+{
+    pthread_mutex_lock(&localMappingsLock);
+    mapping->activeUses--;
+    if (mapping->retired) { retireMappingLocked(mapping); }
+    pthread_mutex_unlock(&localMappingsLock);
+}
+
+// Mapping for callers outside a read or write. Unprotected: another thread may
+// retire it right after this returns.
+static unsigned char * currentMappingBase(const struct VideoFrame *vf, size_t *size, size_t *frameSize, unsigned int *bufferCount)
+{
+    unsigned char *base = NULL;
+    pthread_mutex_lock(&localMappingsLock);
+    struct localStreamMapping *mapping = currentMappingLocked(vf);
+    if (mapping != NULL)
+    {
+        base = mapping->base;
+        if (size != NULL)        { *size        = mapping->size; }
+        if (frameSize != NULL)   { *frameSize   = mapping->frameSize; }
+        if (bufferCount != NULL) { *bufferCount = mapping->bufferCount; }
+    }
+    pthread_mutex_unlock(&localMappingsLock);
+    return base;
+}
+
+// Unmaps this process's mapping of vf's slot as soon as nothing here uses it.
+static void releaseMapping(const struct VideoFrame *vf)
+{
+    pthread_mutex_lock(&localMappingsLock);
+    for (int i=0; i<MAX_LOCAL_STREAM_MAPPINGS; i++)
+    {
+        if (localMappings[i].inUse && !localMappings[i].retired && localMappings[i].vf==vf) { retireMappingLocked(&localMappings[i]); break; }
+    }
+    pthread_mutex_unlock(&localMappingsLock);
+}
+
 // ---------------------------------------------------------------------------
 // Per-thread bookkeeping of "which slot did *this* thread most recently latch
 // onto for VideoFrame X via startReadingFromVideoBufferPointer()". This can't
 // live in the shared VideoFrame struct itself: two reader processes (or two
 // threads) can legitimately be looking at two different slots at once, and
 // pointers/state written into shared memory by one process are meaningless to
-// another anyway (see the warning on client_address_space_data_pointer). A
-// small thread-local table keyed by the VideoFrame's address gives every
-// start/stop pair its own private slot index for free, with zero change to
-// any caller's code.
+// another anyway. A small thread-local table keyed by the VideoFrame's address
+// gives every start/stop pair its own private slot index for free, with zero
+// change to any caller's code.
 // ---------------------------------------------------------------------------
 #define MAX_TLS_READ_ENTRIES 16
 
 struct tlsReadEntry
 {
     const struct VideoFrame *vf;
+    struct localStreamMapping *mapping; //<- this process's mapping the read uses, kept mapped until stop
     unsigned int index;        //<- slot this thread latched onto
+    int registered;            //<- readerEntry/registration hold a registration (multi-buffered streams only)
     unsigned int readerEntry;  //<- which vf->readers[] entry holds this read's registration
     uint64_t registration;     //<- value stored in that entry, so stop only ever releases its own
     int inUse;
@@ -133,14 +270,6 @@ static struct tlsReadEntry * tlsReadFindFree()
     return NULL;
 }
 
-static int tlsReadIndexLookup(const struct VideoFrame *vf, unsigned int *outIndex)
-{
-    struct tlsReadEntry *entry = tlsReadFind(vf);
-    if (entry == NULL) { return 0; }
-    *outIndex = entry->index;
-    return 1;
-}
-
 // Same idea for writers: which frames this thread currently holds the writer
 // lock on, so getVideoFrameDataPointer() can hand a writer the slot it claimed
 // and stopWritingToVideoBufferPointer() can skip publishing a slot whose
@@ -150,6 +279,7 @@ static int tlsReadIndexLookup(const struct VideoFrame *vf, unsigned int *outInde
 struct tlsWriteEntry
 {
     const struct VideoFrame *vf;
+    struct localStreamMapping *mapping; //<- this process's mapping the write uses, kept mapped until stop
     int aborted; //<- last copy_to_shared_memory() of this write was rejected
     int inUse;
 };
@@ -207,8 +337,7 @@ static void reclaimDeadReaders(struct VideoFrame *vf)
         if (registration == 0) { continue; }
 
         pid_t pid = (pid_t) (registration >> 32);
-        // ESRCH: no such process. EPERM means it exists (another user's), so leave it.
-        if ((kill(pid,0) == -1) && (errno == ESRCH))
+        if (processIsDead(pid))
         {
             if (__sync_bool_compare_and_swap(&vf->readers[i], registration, 0))
             {
@@ -232,7 +361,7 @@ static int claimReaderEntry(struct VideoFrame *vf, uint64_t registration)
     return -1;
 }
 
-unsigned int simplePowPPM(unsigned int base,unsigned int exp)
+static unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 {
     if (exp==0) return 1;
     unsigned int retres=base;
@@ -305,6 +434,10 @@ int freeLocalMapping(struct VideoFrameLocalMapping * lm)
 {
   if (lm!=0)
   {
+      for (unsigned int item=0; item<MAX_NUMBER_OF_BUFFERS; item++)
+      {
+          unmapLocalMappingItem(lm,item);
+      }
       free(lm);
       return 1;
   }
@@ -313,20 +446,11 @@ int freeLocalMapping(struct VideoFrameLocalMapping * lm)
 
 unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,unsigned int item)
 {
-  if (lm!=0)
+  if ( (lm!=0) && (lm->smc!=0) && (item<MAX_NUMBER_OF_BUFFERS) && (lm->data[item]!=0) )
   {
-     if ((lm->smc!=0) && (item<lm->smc->numberOfBuffers) )
-     {
-      struct VideoFrame *frame = &lm->smc->buffer[item];
-      if (frame->bufferCount <= 1)
-      {
-          return (unsigned char *) lm->data[item];
-      }
-
-      unsigned int index;
-      if (!tlsReadIndexLookup(frame,&index)) { index = frame->latestIndex; }
-      return (unsigned char *) lm->data[item] + ((size_t) index * frame->frame_size);
-     }
+      // lm->data can be stale after the stream was re-created; the process-wide
+      // mapping (and the slot this thread is reading) is always current
+      return getVideoFrameDataPointer(&lm->smc->buffer[item]);
   }
   return 0;
 }
@@ -334,68 +458,46 @@ unsigned char * getLocalMappingPointer(struct VideoFrameLocalMapping * lm,unsign
 
 int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocalMapping * localMap,unsigned int item)
 {
-  if (context!=0)
-  {
-    if (localMap!=0)
-    {
-     if (item<context->numberOfBuffers)
-     {
-      localMap->smc = context;
-      struct VideoFrame *frame = &context->buffer[item];
-      if (frame!=0)
-      {
-       if (localMap->data[item]==0)
-                {
-                  //Only do the local mapping if we haven't already
-                  localMap->data[item] = map_frame_shared_memory(frame,0);
-                  localMap->sz[item]   = frame->frame_size * frame->bufferCount;
-                  return 1;
-                } else
-                {
-                  fprintf(stderr,"Item %u was already mapped\n",item);
-                  return 1;
-                }
+  if ( (context==0) || (localMap==0) || (item>=MAX_NUMBER_OF_BUFFERS) ) { return 0; }
 
-      } // there is a frame to map
-    } //item number is valid
-   } //local map exists
-  } //context exists
-
-  return 0;
+  localMap->smc = context;
+  size_t size = 0;
+  unsigned char *base = currentMappingBase(&context->buffer[item], &size, NULL, NULL);
+  localMap->data[item] = base;
+  localMap->sz[item]   = (base != NULL) ? size : 0;
+  return (base != NULL);
 }
 
 
 int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,unsigned int item)
 {
- if (localmap!=0)
-  {
-   if ((localmap->smc!=0) && (item<localmap->smc->numberOfBuffers) )
-     {
-      if ( (localmap->data[item]!=0) && (localmap->sz[item]!=0) )
-       {
-        fprintf(stderr,"Unmapping memory for item %u\n",item);
-        munmap(localmap->data[item],localmap->sz[item]);
-        localmap->sz[item]   = 0;
-        localmap->data[item] = 0;
-        return 1;
-       }
-     }
-  }
- return 0;
+ if ( (localmap==0) || (localmap->smc==0) || (item>=MAX_NUMBER_OF_BUFFERS) || (localmap->data[item]==0) ) { return 0; }
+
+ fprintf(stderr,"Unmapping memory for item %u\n",item);
+ // Unmapped right away, unless a read or write in this process still uses it
+ releaseMapping(&localmap->smc->buffer[item]);
+ localmap->sz[item]   = 0;
+ localmap->data[item] = 0;
+ return 1;
+}
+
+// Slot index of the stream named streamName, or -1.
+static int findStreamSlot(const struct SharedMemoryContext *context, const char *streamName)
+{
+    for (unsigned int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
+    {
+        if (context->buffer[i].is_populated && (strncmp(context->buffer[i].name, streamName, sizeof(context->buffer[i].name)) == 0))
+        {
+            return (int) i;
+        }
+    }
+    return -1;
 }
 
 int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
 {
-    if (smvc==0) { return -1; }
-
-    for (unsigned int i=0; i<smvc->numberOfBuffers; i++)
-    {
-        if (strncmp(smvc->buffer[i].name, feedName, sizeof(smvc->buffer[i].name)) == 0)
-        {
-            return i;
-        }
-    }
-    return -1;
+    if ((smvc==0) || (feedName==0)) { return -1; }
+    return findStreamSlot(smvc, feedName);
 }
 
 
@@ -404,28 +506,31 @@ int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
 // time(NULL) only advances once a second, so every frame published inside the
 // same second carried an identical timestamp and any consumer using it as frame
 // identity (e.g. a "skip what I already processed" limiter) throttled to 1 Hz.
-static unsigned long getUnixTimestampMicroseconds()
+static uint64_t getUnixTimestampMicroseconds()
 {
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME,&ts) != 0)
         {
-            return (unsigned long) time(NULL) * 1000000;
+            return (uint64_t) time(NULL) * 1000000;
         }
-    return ((unsigned long) ts.tv_sec * 1000000) + ((unsigned long) ts.tv_nsec / 1000);
+    return ((uint64_t) ts.tv_sec * 1000000) + ((uint64_t) ts.tv_nsec / 1000);
 }
 
 // Function to copy data from a buffer to the shared memory buffer
-int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, unsigned long unix_timestamp)
+int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, uint64_t unix_timestamp)
 {
   struct tlsWriteEntry *writeRecord = tlsWriteFind(frame);
   if ( (frame!=0) && (src!=0) && (n!=0) )
     {
-        if (frame->client_address_space_data_pointer!=0)
+        // Inside start/stopWritingToVideoBufferPointer() this is the claimed slot
+        unsigned char *target = getVideoFrameDataPointer(frame);
+        size_t capacity = (writeRecord != NULL) ? writeRecord->mapping->frameSize : frame->frame_size;
+        if (target!=0)
         {
-           if (frame->frame_size >= n)
+           if (capacity >= n)
            {
-             //fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,frame->client_address_space_data_pointer);
-             memcpy(frame->client_address_space_data_pointer,src, n);
+             //fprintf(stderr,"Will copy %lu bytes to stream %s, pointing @ %p\n",n,frame->name,target);
+             memcpy(target,src, n);
              // Stamped per-slot (not a single shared field) so a reader holding
              // an older slot never sees a timestamp that belongs to a newer,
              // not-yet-visible-to-them frame.
@@ -433,7 +538,7 @@ int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, u
              if (writeRecord != NULL) { writeRecord->aborted = 0; }
              return 1;
            } else { fprintf(stderr,"copy_to_shared_memory: Will not overflow target \n"); }
-        } else { fprintf(stderr,"copy_to_shared_memory: No client address space data pointer \n"); }
+        } else { fprintf(stderr,"copy_to_shared_memory: Stream %s has no memory mapped \n",frame->name); }
     } else { fprintf(stderr,"copy_to_shared_memory: No Target VideoFrame our valid source \n"); }
 
   // The claimed slot still holds an older frame - don't let the matching
@@ -499,17 +604,55 @@ void printSharedMemoryContextState(struct SharedMemoryContext *context)
 {
   if (!verboseEnabled()) { return; }
   if (context==0) { fprintf(stderr,"Empty Context\n"); return; }
-  fprintf(stderr,"Populated Streams : %u\n",context->numberOfBuffers);
+  fprintf(stderr,"Streams are in slots below : %u\n",context->numberOfBuffers);
   for (int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
      {
-         fprintf(stderr,"Bank %u : %ux%u:%u @ %p\n",i,context->buffer[i].width,context->buffer[i].height,context->buffer[i].channels,context->buffer[i].client_address_space_data_pointer);
+         const struct VideoFrame *frame = &context->buffer[i];
+         fprintf(stderr,"Bank %u : %ux%u:%u %s%s\n",i,frame->width,frame->height,frame->channels,frame->name,frame->is_populated ? "" : "(free)");
      }
+}
+
+static int contextHasThisLayout(const struct SharedMemoryContext *context)
+{
+    return (context->magic == SHMVB_CONTEXT_MAGIC) && (context->version == SHMVB_CONTEXT_VERSION);
+}
+
+// Maps the context behind shm_fd once it has this build's size and layout,
+// waiting briefly in case its creator is still initializing it. NULL if it doesn't.
+static struct SharedMemoryContext * mapCompatibleContext(int shm_fd)
+{
+    size_t total_size = sizeof(struct SharedMemoryContext);
+    for (int attempts=0; attempts<100; attempts++)
+    {
+        struct stat objectStat;
+        if ((fstat(shm_fd, &objectStat) == 0) && ((size_t) objectStat.st_size == total_size))
+        {
+            struct SharedMemoryContext *context = (struct SharedMemoryContext*) mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+            if (context == MAP_FAILED) { return NULL; }
+            if (contextHasThisLayout(context)) { return context; }
+            munmap(context, total_size);
+        }
+        usleep(1000);
+    }
+    return NULL;
 }
 
 // Create and open shared memory context descriptor
 int createSharedMemoryContextDescriptor(const char *path)
 {
-    int shm_fd = shm_open(path, O_CREAT | O_RDWR, 0666);
+    if ((path == NULL) || (strlen(path) > MAX_SHM_NAME))
+    {
+        fprintf(stderr,RED "Invalid shared memory context name\n" NORMAL);
+        return -1;
+    }
+
+    int created = 1;
+    int shm_fd = shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0666);
+    if ((shm_fd == -1) && (errno == EEXIST))
+    {
+        created = 0;
+        shm_fd  = shm_open(path, O_RDWR, 0666);
+    }
     if (shm_fd == -1)
     {
         fprintf(stderr,RED "shm_open\n" NORMAL);
@@ -518,6 +661,20 @@ int createSharedMemoryContextDescriptor(const char *path)
     }
 
     size_t total_size = sizeof(struct SharedMemoryContext);
+    if (!created)
+    {
+        // Keep a context this build can use, streams and all - several programs
+        // call this at startup and must not wipe each other's streams
+        struct SharedMemoryContext *existing = mapCompatibleContext(shm_fd);
+        if (existing != NULL)
+        {
+            munmap(existing, total_size);
+            close(shm_fd);
+            return 0;
+        }
+        fprintf(stderr,"Shared memory context %s has an incompatible layout, re-initializing it\n",path);
+    }
+
     if (ftruncate(shm_fd, total_size) == -1)
     {
         fprintf(stderr,RED "ftruncate\n" NORMAL);
@@ -535,21 +692,174 @@ int createSharedMemoryContextDescriptor(const char *path)
         return -1;
     }
 
-    // Initialize the shared memory context
+    // Initialize the shared memory context. The magic number goes in last:
+    // connecting processes wait for it before using anything else.
     memset(context, 0, total_size);
+    snprintf(context->descriptorName, sizeof(context->descriptorName), "%s", path);
+    // Seeded from the clock so backing object names never repeat, even after re-initializing
+    context->nextGeneration = getUnixTimestampMicroseconds();
+    context->version = SHMVB_CONTEXT_VERSION;
+    context->magic   = SHMVB_CONTEXT_MAGIC;
     printSharedMemoryContextState(context);
     munmap(context, total_size);
     close(shm_fd);
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Stream registry: creating, joining, replacing and destroying streams.
+// ---------------------------------------------------------------------------
 
-// Create shared memory for a video frame
-int create_frame_shared_memory(struct VideoFrame *frame)
+// Serializes registry changes across processes. The holder's PID is stored so a
+// process that died holding the lock can't jam it.
+static int acquireRegistryLock(struct SharedMemoryContext *context)
 {
-    if (frame==0) {return -1; }
+    pid_t pid = getpid();
+    for (int attempts=0; attempts<ATTEMPTS_TO_LOCK_A_BUFFER; attempts++)
+    {
+        if (__sync_bool_compare_and_swap(&context->registryLockPid, 0, pid)) { return 1; }
+        int32_t holder = context->registryLockPid;
+        if (processIsDead(holder) && __sync_bool_compare_and_swap(&context->registryLockPid, holder, pid)) { return 1; }
+        usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
+    }
+    fprintf(stderr,RED "Timed out waiting to create or destroy a stream\n" NORMAL);
+    return 0;
+}
 
-    frame->bufferCount = getConfiguredBufferCount();
+static void releaseRegistryLock(struct SharedMemoryContext *context)
+{
+    __sync_bool_compare_and_swap(&context->registryLockPid, getpid(), 0);
+}
+
+// Caller holds the registry lock.
+static void trimNumberOfBuffers(struct SharedMemoryContext *context)
+{
+    while ((context->numberOfBuffers > 0) && (!context->buffer[context->numberOfBuffers-1].is_populated))
+    {
+        context->numberOfBuffers--;
+    }
+}
+
+// Creates the shm object holding a stream's pixels. A leftover object with the
+// same name (e.g. from before the context was re-initialized) is replaced.
+static int createBackingObject(const char *backingName, size_t size)
+{
+    int shm_fd = shm_open(backingName, O_CREAT | O_EXCL | O_RDWR, 0666);
+    if ((shm_fd == -1) && (errno == EEXIST))
+    {
+        shm_unlink(backingName);
+        shm_fd = shm_open(backingName, O_CREAT | O_EXCL | O_RDWR, 0666);
+    }
+    if (shm_fd == -1)
+    {
+        fprintf(stderr,RED "shm_open frame %s\n" NORMAL,backingName);
+        return 0;
+    }
+    if (ftruncate(shm_fd, size) == -1)
+    {
+        fprintf(stderr,RED "ftruncate frame %s\n" NORMAL,backingName);
+        close(shm_fd);
+        shm_unlink(backingName);
+        return 0;
+    }
+    close(shm_fd);
+    return 1;
+}
+
+// Creates streamName, joins it if it already exists with the same size, or
+// replaces it if its size differs and its owner is this process or has exited.
+static int registerStream(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels, size_t frameSize)
+{
+    if ((context==0) || (streamName==0)) { return EXIT_FAILURE; }
+    if ((streamName[0]==0) || (strlen(streamName) >= MAX_SHM_NAME) || (strchr(streamName,'/') != NULL))
+    {
+        fprintf(stderr,"Invalid stream name\n");
+        return EXIT_FAILURE;
+    }
+    unsigned int bufferCount = getConfiguredBufferCount();
+    if ((frameSize == 0) || (frameSize > SIZE_MAX / bufferCount))
+    {
+        fprintf(stderr,"Invalid size for stream %s\n",streamName);
+        return EXIT_FAILURE;
+    }
+
+    if (!acquireRegistryLock(context)) { return EXIT_FAILURE; }
+
+    int slot = findStreamSlot(context, streamName);
+    if (slot != -1)
+    {
+        struct VideoFrame *existing = &context->buffer[slot];
+        pid_t owner = existing->ownerPid;
+        int ownerExited = processIsDead(owner);
+        if ((existing->width == width) && (existing->height == height) && (existing->channels == channels) && (existing->frame_size == frameSize))
+        {
+            fprintf(stderr,"Stream %s already exists, joining it\n",streamName);
+            if (ownerExited)
+            {
+                // Its creator is gone, possibly mid-write: take the stream over
+                existing->ownerPid = getpid();
+                __sync_lock_release(&existing->locked);
+            }
+            releaseRegistryLock(context);
+            return EXIT_SUCCESS;
+        }
+        if ((owner != getpid()) && !ownerExited)
+        {
+            fprintf(stderr,"Stream %s already exists with a different size, and its owner (pid %d) is still running\n",streamName,owner);
+            releaseRegistryLock(context);
+            return EXIT_FAILURE;
+        }
+    } else
+    {
+        for (unsigned int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
+        {
+            if (!context->buffer[i].is_populated) { slot = (int) i; break; }
+        }
+        if (slot == -1)
+        {
+            fprintf(stderr,"createVideoFrameMetaData: maximum number of buffers (%u) reached\n", MAX_NUMBER_OF_BUFFERS);
+            releaseRegistryLock(context);
+            return EXIT_FAILURE;
+        }
+    }
+
+    // Name the new backing object after the context, the stream and a fresh
+    // generation, so it never collides with another context's stream of the
+    // same name or with the object it replaces (which may still be mapped).
+    uint64_t generation = context->nextGeneration;
+    const char *contextName = (context->descriptorName[0]=='/') ? context->descriptorName+1 : context->descriptorName;
+    char backingName[MAX_SHM_NAME+1];
+    int nameLength = snprintf(backingName, sizeof(backingName), "/%s.%s.%llu", contextName, streamName, (unsigned long long) generation);
+    if ((nameLength < 0) || (nameLength >= NAME_MAX))
+    {
+        fprintf(stderr,"Context and stream names are too long for stream %s\n",streamName);
+        releaseRegistryLock(context);
+        return EXIT_FAILURE;
+    }
+
+    struct VideoFrame *frame = &context->buffer[slot];
+    if (frame->is_populated)
+    {
+        fprintf(stderr,"Replacing stream %s with a %ux%u:%u one\n",streamName,width,height,channels);
+        frame->is_populated = 0;
+        // Processes that mapped the old object keep it until they let go
+        shm_unlink(frame->backingName);
+    } else
+    {
+        fprintf(stderr,"Creating new stream %s\n",streamName);
+    }
+
+    // Readers only trust a slot that is populated and keeps its generation while
+    // they copy it, so: unpopulated (above), new generation, fields, populated last.
+    context->nextGeneration = generation + 1;
+    frame->generation  = generation;
+    snprintf(frame->name, sizeof(frame->name), "%s", streamName);
+    memcpy(frame->backingName, backingName, sizeof(frame->backingName));
+    frame->width       = width;
+    frame->height      = height;
+    frame->channels    = channels;
+    frame->frame_size  = frameSize;
+    frame->bufferCount = bufferCount;
     frame->writeIndex  = 0;
     frame->latestIndex = 0;
     for (unsigned int i=0; i<MAX_LOCAL_BUFFERS; i++)
@@ -560,82 +870,33 @@ int create_frame_shared_memory(struct VideoFrame *frame)
     {
         frame->readers[i] = 0;
     }
+    frame->locked   = 0;
+    frame->ownerPid = getpid();
 
-    size_t totalSize = frame->frame_size * frame->bufferCount;
-
-    fprintf(stderr,"Creating new video frame shared memory for %s (%u slot(s))\n",frame->name,frame->bufferCount);
-    int shm_fd = shm_open(frame->name, O_CREAT | O_RDWR, 0666);
-    if (shm_fd == -1)
+    int result = EXIT_FAILURE;
+    if (createBackingObject(backingName, frameSize * bufferCount))
     {
-        fprintf(stderr,RED "shm_open frame\n" NORMAL);
-        //perror("shm_open frame");
-        return -1;
-    }
-
-    if (ftruncate(shm_fd, totalSize) == -1)
+        if ((unsigned int) slot >= context->numberOfBuffers) { context->numberOfBuffers = (unsigned int) slot + 1; }
+        frame->is_populated = 1;
+        result = EXIT_SUCCESS;
+    } else
     {
-        fprintf(stderr,RED "ftruncate frame\n" NORMAL);
-        //perror("ftruncate frame");
-        close(shm_fd);
-        return -1;
+        memset(frame, 0, sizeof(struct VideoFrame));
+        trimNumberOfBuffers(context);
     }
-
-    fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,totalSize);
-    frame->mmap_base_pointer = (unsigned char*) mmap(NULL, totalSize, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    frame->client_address_space_data_pointer = frame->mmap_base_pointer;
-    fprintf(stderr,"MMAP pointer for %s @ %p\n",frame->name,frame->client_address_space_data_pointer);
-    if (frame->client_address_space_data_pointer == MAP_FAILED)
-    {
-        fprintf(stderr,RED "mmap frame\n" NORMAL);
-        perror("mmap frame");
-        close(shm_fd);
-        return -1;
-    }
-
-    frame->locked = 0;       // Initialize the lock to 0
-    frame->is_populated = 1; // Mark frame as populated
-    close(shm_fd);
-    return 0;
+    releaseRegistryLock(context);
+    return result;
 }
 
 // Map existing shared memory for a video frame
 unsigned char * map_frame_shared_memory(struct VideoFrame *frame,int copyToVideoFramePointer)
 {
-    unsigned char * result = NULL;
+    (void) copyToVideoFramePointer; // mappings are always tracked per process now
     if (frame==0) { fprintf(stderr,"error: map_frame_shared_memory called without a valid video frame!\n"); return NULL; }
 
-    // frame->bufferCount was set by whichever process created this stream and
-    // lives in shared memory, so it's already correct here - map the WHOLE
-    // multi-slot region, not just one slot's worth.
-    size_t totalSize = frame->frame_size * frame->bufferCount;
-    fprintf(stderr,"MMAP shared memory for %s , size %lu\n",frame->name,totalSize);
-
-    int shm_fd = shm_open(frame->name, O_RDWR, 0666);
-    if (shm_fd  == -1)
-    {
-        fprintf(stderr,RED "shm_open frame\n" NORMAL);
-        //perror("shm_open frame");
-        return NULL;
-    }
-
-    result = (unsigned char*) mmap(NULL, totalSize, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd , 0); //
-    if (result  == MAP_FAILED)
-    {
-        fprintf(stderr,RED "mmap frame\n" NORMAL);
-        //perror("mmap frame");
-        close(shm_fd);
-        return NULL;
-    }
-
-    if (copyToVideoFramePointer)
-    {
-        frame->mmap_base_pointer = result;
-        frame->client_address_space_data_pointer = result;
-    }
-
-    fprintf(stderr,"MMAP shared memory now points at %p\n",result);
-    close(shm_fd);
-    return result;
+    unsigned char *base = currentMappingBase(frame, NULL, NULL, NULL);
+    if (base == NULL) { fprintf(stderr,RED "Could not map stream %s\n" NORMAL,frame->name); }
+    return base;
 }
 
 // Get a pointer to a video buffer by feed name
@@ -644,14 +905,8 @@ struct VideoFrame* getVideoBufferPointer(struct SharedMemoryContext * smvc, cons
     if (smvc==0)     {return NULL; }
     if (feedName==0) {return NULL; }
 
-    for (unsigned int i = 0; i < smvc->numberOfBuffers; i++)
-    {
-        if (strncmp(smvc->buffer[i].name, feedName, sizeof(smvc->buffer[i].name)) == 0)
-        {
-            return &smvc->buffer[i];
-        }
-    }
-    return NULL;
+    int slot = findStreamSlot(smvc, feedName);
+    return (slot == -1) ? NULL : &smvc->buffer[slot];
 }
 //------------------------------------------------------------
 //------------------------------------------------------------
@@ -660,26 +915,31 @@ unsigned char * getVideoFrameDataPointer(struct VideoFrame * frame)
 {
   if (frame)
   {
-    if (frame->bufferCount <= 1)
-    {
-        return frame->client_address_space_data_pointer;
-    }
-
     // A writer (between start/stopWritingToVideoBufferPointer() on this thread)
     // gets the slot it claimed, so writing in place never touches the slot
     // readers are using and is exactly what gets published.
-    if (tlsWriteFind(frame) != NULL)
+    struct tlsWriteEntry *writeRecord = tlsWriteFind(frame);
+    if (writeRecord != NULL)
     {
-        return frame->mmap_base_pointer + ((size_t) frame->writeIndex * frame->frame_size);
+        return writeRecord->mapping->base + ((size_t) frame->writeIndex * writeRecord->mapping->frameSize);
     }
 
-    // Resolve to whichever slot *this thread* latched onto via a matching
-    // startReadingFromVideoBufferPointer() call; if none is on record (misuse,
-    // or the table overflowed - see MAX_TLS_READ_ENTRIES) fall back to the
-    // current published slot, which is still always a complete frame.
-    unsigned int index;
-    if (!tlsReadIndexLookup(frame,&index)) { index = frame->latestIndex; }
-    return frame->mmap_base_pointer + ((size_t) index * frame->frame_size);
+    // A reader gets whichever slot *this thread* latched onto via a matching
+    // startReadingFromVideoBufferPointer() call, in the mapping that read keeps alive.
+    struct tlsReadEntry *readRecord = tlsReadFind(frame);
+    if (readRecord != NULL)
+    {
+        return readRecord->mapping->base + ((size_t) readRecord->index * readRecord->mapping->frameSize);
+    }
+
+    // Outside a read or write (unprotected): the currently published slot
+    size_t frameSize = 0;
+    unsigned int bufferCount = 0;
+    unsigned char *base = currentMappingBase(frame, NULL, &frameSize, &bufferCount);
+    if (base == NULL) { return 0; }
+    unsigned int index = frame->latestIndex;
+    if (index >= bufferCount) { index = 0; }
+    return base + ((size_t) index * frameSize);
   }
   return 0;
 }
@@ -720,20 +980,19 @@ unsigned int getVideoFrameChannels(struct VideoFrame * frame)
   return 0;
 }
 
-unsigned long getVideoFrameTimestamp(struct VideoFrame * frame)
+uint64_t getVideoFrameTimestamp(struct VideoFrame * frame)
 {
   if (frame)
   {
-    if (frame->bufferCount <= 1) { return frame->timestamps[0]; }
-
-    unsigned int index;
-    if (!tlsReadIndexLookup(frame,&index)) { index = frame->latestIndex; }
+    struct tlsReadEntry *readRecord = tlsReadFind(frame);
+    unsigned int index = (readRecord != NULL) ? readRecord->index : frame->latestIndex;
+    if (index >= MAX_LOCAL_BUFFERS) { index = 0; }
     return frame->timestamps[index];
   }
   return 0;
 }
 
-void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timestamp)
+void setVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timestamp)
 {
   if (frame)
   {
@@ -752,56 +1011,19 @@ void setVideoFrameTimestamp(struct VideoFrame * frame, unsigned long unix_timest
 //------------------------------------------------------------
 int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels)
 {
-   if (context!=0)
-   {
-      int contextID = -1;
-      for (unsigned int i=0; i<context->numberOfBuffers; i++)
-      {
-         if (strncmp(streamName,context->buffer[i].name,MAX_SHM_NAME)==0)
-         {
-           fprintf(stderr,"Stream already exists\n");
-           contextID = i;
-         }
-      }
-
-      if (contextID==-1)
-      {
-         if (context->numberOfBuffers >= MAX_NUMBER_OF_BUFFERS)
-         {
-             fprintf(stderr,"createVideoFrameMetaData: maximum number of buffers (%u) reached\n", MAX_NUMBER_OF_BUFFERS);
-             return EXIT_FAILURE;
-         }
-         fprintf(stderr,"Creating new stream %s\n",streamName);
-         contextID = context->numberOfBuffers++;
-      }
-    // Example to add a new buffer (Server)
-    struct VideoFrame *newBuffer = &context->buffer[contextID];
-    snprintf(newBuffer->name,MAX_SHM_NAME,"%s",streamName);
-    newBuffer->width      = width;
-    newBuffer->height     = height;
-    newBuffer->channels   = channels;
-
     // Check for multiplication overflow before computing frame_size
-    if (newBuffer->height != 0 && newBuffer->width > (SIZE_MAX / newBuffer->height))
+    if (height != 0 && width > (SIZE_MAX / height))
     {
         fprintf(stderr,"createVideoFrameMetaData: width*height would overflow\n");
         return EXIT_FAILURE;
     }
-    size_t wh = (size_t)newBuffer->width * newBuffer->height;
-    if (newBuffer->channels != 0 && wh > (SIZE_MAX / newBuffer->channels))
+    size_t wh = (size_t)width * height;
+    if (channels != 0 && wh > (SIZE_MAX / channels))
     {
         fprintf(stderr,"createVideoFrameMetaData: width*height*channels would overflow\n");
         return EXIT_FAILURE;
     }
-    newBuffer->frame_size = wh * newBuffer->channels;
-
-    if (create_frame_shared_memory(newBuffer) == 0)
-    {
-     return EXIT_SUCCESS;
-    }
-
-   }
-   return EXIT_FAILURE;
+    return registerStream(context, streamName, width, height, channels, wh * channels);
 }
 
 
@@ -811,43 +1033,7 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
 //------------------------------------------------------------
 int createGenericMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int dataSize)
 {
-   if (context!=0)
-   {
-      int contextID = -1;
-      for (unsigned int i=0; i<context->numberOfBuffers; i++)
-      {
-         if (strncmp(streamName,context->buffer[i].name,MAX_SHM_NAME)==0)
-         {
-           fprintf(stderr,"Stream already exists\n");
-           contextID = i;
-         }
-      }
-
-      if (contextID==-1)
-      {
-         if (context->numberOfBuffers >= MAX_NUMBER_OF_BUFFERS)
-         {
-             fprintf(stderr,"createGenericMetaData: maximum number of buffers (%u) reached\n", MAX_NUMBER_OF_BUFFERS);
-             return EXIT_FAILURE;
-         }
-         fprintf(stderr,"Creating new stream %s\n",streamName);
-         contextID = context->numberOfBuffers++;
-      }
-    // Example to add a new buffer (Server)
-    struct VideoFrame *newBuffer = &context->buffer[contextID];
-    snprintf(newBuffer->name,MAX_SHM_NAME,"%s",streamName);
-    newBuffer->width      = dataSize;
-    newBuffer->height     = 1;
-    newBuffer->channels   = 1;
-    newBuffer->frame_size = dataSize;
-
-    if (create_frame_shared_memory(newBuffer) == 0)
-    {
-     return EXIT_SUCCESS;
-    }
-
-   }
-   return EXIT_FAILURE;
+    return registerStream(context, streamName, dataSize, 1, 1, dataSize);
 }
 
 
@@ -856,69 +1042,46 @@ int createGenericMetaData(struct SharedMemoryContext* context,const char * strea
 int destroyVideoFrame(struct SharedMemoryContext* context, const char *streamName)
 {
     if (context == NULL || streamName == NULL) { return EXIT_FAILURE; }
+    if (!acquireRegistryLock(context)) { return EXIT_FAILURE; }
 
-    int index = -1;
-    for (unsigned int i = 0; i < context->numberOfBuffers; i++)
-    {
-        if (strncmp(context->buffer[i].name, streamName, MAX_SHM_NAME) == 0)
-        {
-            index = i;
-            break;
-        }
-    }
-
+    int index = findStreamSlot(context, streamName);
     if (index == -1)
     {
         fprintf(stderr, "Stream %s not found\n", streamName);
+        releaseRegistryLock(context);
         return EXIT_FAILURE;
     }
 
     struct VideoFrame *frame = &context->buffer[index];
-
-    if (frame->mmap_base_pointer != NULL)
+    pid_t owner = frame->ownerPid;
+    if ((owner != getpid()) && !processIsDead(owner))
     {
-        // Unmap the shared memory (the full bufferCount*frame_size mapping,
-        // not just one slot - client_address_space_data_pointer may currently
-        // point at a slot other than the base after prior writes)
-        if (munmap(frame->mmap_base_pointer, frame->frame_size * frame->bufferCount) == -1)
-        {
-            debug_message("munmap frame");
-            return EXIT_FAILURE;
-        }
-        frame->mmap_base_pointer = NULL;
-        frame->client_address_space_data_pointer = NULL;
-    }
-
-    // Remove the shared memory object
-    if (shm_unlink(frame->name) == -1)
-    {
-        debug_message("shm_unlink frame");
+        fprintf(stderr, "Not destroying stream %s: it belongs to process %d, which is still running\n", streamName, owner);
+        releaseRegistryLock(context);
         return EXIT_FAILURE;
     }
 
-    // Shift remaining buffers to fill the gap
-    for (unsigned int i = index; i < context->numberOfBuffers - 1; i++)
+    // Other processes notice through is_populated/generation; the pixels stay
+    // wherever they're still mapped until those processes let go of them.
+    frame->is_populated = 0;
+    if (shm_unlink(frame->backingName) == -1)
     {
-        context->buffer[i] = context->buffer[i + 1];
+        debug_message("shm_unlink frame");
     }
+    releaseMapping(frame);
 
-    context->numberOfBuffers--;
+    // Only this slot is cleared: other streams keep their slots, and the
+    // VideoFrame pointers other processes hold to them stay valid
+    memset(frame, 0, sizeof(struct VideoFrame));
+    trimNumberOfBuffers(context);
+    releaseRegistryLock(context);
     fprintf(stderr, "Stream %s destroyed\n", streamName);
-
-    // Zero out the now-unused last slot (not 'frame', which was shifted over)
-    fprintf(stderr, "Final cleanup of %s\n",streamName);
-    memset(&context->buffer[context->numberOfBuffers], 0, sizeof(struct VideoFrame));
-    fprintf(stderr, "Done with %s\n",streamName);
-
-
     return EXIT_SUCCESS;
 }
 
 // Connect to existing shared memory context descriptor
 struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *path)
 {
-    setup_signal_handlers();
-
     int shm_fd = shm_open(path, O_RDWR, 0666);
     if (shm_fd == -1)
     {
@@ -927,17 +1090,12 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
         return NULL;
     }
 
-    size_t total_size = sizeof(struct SharedMemoryContext);
-    struct SharedMemoryContext *context = (struct SharedMemoryContext*) mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (context == MAP_FAILED)
-    {
-        debug_message(RED "mmap\n" NORMAL);
-        //perror("mmap");
-        close(shm_fd);
-        return NULL;
-    }
-
+    struct SharedMemoryContext *context = mapCompatibleContext(shm_fd);
     close(shm_fd);
+    if (context == NULL)
+    {
+        fprintf(stderr,RED "Shared memory context %s isn't laid out for this build of the library (version %u); rebuild every program using it, or recreate it with createSharedMemoryContextDescriptor()" NORMAL "\n",path,SHMVB_CONTEXT_VERSION);
+    }
     return context;
 }
 
@@ -966,66 +1124,66 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
         return 0; // Buffer is already locked and we timed out waiting for it
     }
 
-    // Legacy single-buffer mode: client_address_space_data_pointer already
-    // points at the one and only slot, nothing else to do.
-    if (vf->bufferCount <= 1)
-    {
-        debug_message(GREEN "success\n" NORMAL);
-        return 1;
-    }
-
+    // Without a record (this thread already holds the writer lock on too many
+    // frames) getVideoFrameDataPointer() couldn't find the claimed slot, and
+    // without a mapping (the stream is gone) there's nowhere to write.
     struct tlsWriteEntry *writeRecord = tlsWriteFindFree();
-    if (writeRecord == NULL)
+    struct localStreamMapping *mapping = (writeRecord != NULL) ? beginMappingUse(vf) : NULL;
+    if (mapping == NULL)
     {
-        // This thread already holds the writer lock on too many frames; without
-        // a record getVideoFrameDataPointer() couldn't find the claimed slot.
         __sync_lock_release(&vf->locked);
         debug_message(RED "failed\n" NORMAL);
         return 0;
     }
 
-    // Multi-buffering: claim a slot that isn't the currently-published one and
-    // has no active readers, so this write can never clobber a frame a reader
-    // is still copying out. `locked` (held for the remainder of this write)
-    // already serializes this search against any other writer, so a plain
-    // read of readers[] here is safe - no reader ever registers on a slot
-    // other than the live vf->latestIndex, and that can't change while we
-    // hold the writer lock.
-    unsigned int chosen = vf->bufferCount; // sentinel: "not found yet"
-    attempts = 0;
-    while (attempts<ATTEMPTS_TO_LOCK_A_BUFFER)
+    // Legacy single-buffer mode: the one and only slot
+    unsigned int chosen = 0;
+    if (mapping->bufferCount > 1)
     {
-        for (unsigned int k=0; k<vf->bufferCount; k++)
+        // Multi-buffering: claim a slot that isn't the currently-published one and
+        // has no active readers, so this write can never clobber a frame a reader
+        // is still copying out. `locked` (held for the remainder of this write)
+        // already serializes this search against any other writer, so a plain
+        // read of readers[] here is safe - no reader ever registers on a slot
+        // other than the live vf->latestIndex, and that can't change while we
+        // hold the writer lock.
+        chosen = mapping->bufferCount; // sentinel: "not found yet"
+        attempts = 0;
+        while (attempts<ATTEMPTS_TO_LOCK_A_BUFFER)
         {
-            unsigned int candidate = (vf->latestIndex + 1 + k) % vf->bufferCount;
-            if (candidate == vf->latestIndex) { continue; }
-            if (!slotHasReaders(vf, candidate))
+            for (unsigned int k=0; k<mapping->bufferCount; k++)
             {
-                chosen = candidate;
-                break;
+                unsigned int candidate = (vf->latestIndex + 1 + k) % mapping->bufferCount;
+                if (candidate == vf->latestIndex) { continue; }
+                if (!slotHasReaders(vf, candidate))
+                {
+                    chosen = candidate;
+                    break;
+                }
             }
+            if (chosen != mapping->bufferCount) { break; }
+            // Every candidate slot is busy - free any held by readers that died mid-read
+            reclaimDeadReaders(vf);
+            usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
+            ++attempts;
         }
-        if (chosen != vf->bufferCount) { break; }
-        // Every candidate slot is busy - free any held by readers that died mid-read
-        reclaimDeadReaders(vf);
-        usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
-        ++attempts;
-    }
 
-    if (chosen == vf->bufferCount)
-    {
-        // Every non-latest slot has a lingering reader - extremely unlikely at
-        // video framerates. Give up without touching any data (frame dropped,
-        // never corrupted) and release the writer lock we're holding.
-        __sync_lock_release(&vf->locked);
-        debug_message(RED "failed\n" NORMAL);
-        return 0;
+        if (chosen == mapping->bufferCount)
+        {
+            // Every non-latest slot has a lingering reader - extremely unlikely at
+            // video framerates. Give up without touching any data (frame dropped,
+            // never corrupted) and release the writer lock we're holding.
+            endMappingUse(mapping);
+            __sync_lock_release(&vf->locked);
+            debug_message(RED "failed\n" NORMAL);
+            return 0;
+        }
     }
 
     vf->writeIndex = chosen;
-    vf->client_address_space_data_pointer = vf->mmap_base_pointer + ((size_t) chosen * vf->frame_size);
 
     writeRecord->vf      = vf;
+    writeRecord->mapping = mapping;
     writeRecord->aborted = 0;
     writeRecord->inUse   = 1;
 
@@ -1043,6 +1201,7 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
     // A rejected copy left the claimed slot holding an older frame; publishing
     // it would send readers back in time, so the previous frame stays latest.
     int aborted = (writeRecord != NULL) && writeRecord->aborted;
+    struct localStreamMapping *mapping = (writeRecord != NULL) ? writeRecord->mapping : NULL;
     if (writeRecord != NULL) { writeRecord->inUse = 0; }
 
     if ((vf->bufferCount > 1) && (!aborted))
@@ -1056,17 +1215,20 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
     }
 
     __sync_lock_release(&vf->locked);
+    if (mapping != NULL) { endMappingUse(mapping); }
     debug_message(GREEN "success\n" NORMAL);
     return 1;
 }
 
 // Re-stamp the frame currently published as latest, without writing new data.
 // Holding the writer lock keeps latestIndex from moving while we stamp it.
-int setLatestVideoFrameTimestamp(struct VideoFrame *vf, unsigned long unix_timestamp)
+int setLatestVideoFrameTimestamp(struct VideoFrame *vf, uint64_t unix_timestamp)
 {
     if (vf==0) { return 0; }
     if (!acquireWriterLock(vf)) { return 0; }
-    vf->timestamps[vf->latestIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
+    unsigned int index = vf->latestIndex;
+    if (index >= MAX_LOCAL_BUFFERS) { index = 0; }
+    vf->timestamps[index] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
     __sync_lock_release(&vf->locked);
     return 1;
 }
@@ -1080,21 +1242,12 @@ int setLatestVideoFrameTimestamp(struct VideoFrame *vf, unsigned long unix_times
 // slots with registered readers) can never overwrite the data being read. The
 // load-register-recheck sequence below closes the narrow window where the
 // published slot changes between reading it and registering interest in it.
+// Either way the read keeps this process's mapping of the stream alive until
+// the matching stop, even if the stream is re-created meanwhile.
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
     if (vf==0) { return 0; }
     debug_message("startReadingFromVideoBufferPointer :");
-
-    if (vf->bufferCount <= 1)
-    {
-        if (__sync_fetch_and_add(&vf->locked, 0))
-        {
-            debug_message(RED "failed\n" NORMAL);
-            return 0; // Buffer is locked by a writer
-        }
-        debug_message(GREEN "success\n" NORMAL);
-        return 1;
-    }
 
     // An earlier start on this frame from this thread that was never stopped
     // is superseded rather than leaked.
@@ -1109,37 +1262,66 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
         return 0;
     }
 
-    pid_t pid = getpid();
-    unsigned int idx;
-    uint64_t registration;
-    int entry;
-    for (;;)
+    struct localStreamMapping *mapping = beginMappingUse(vf);
+    if (mapping == NULL)
     {
-        idx          = vf->latestIndex;
-        registration = packReaderRegistration(pid, idx);
-        entry        = claimReaderEntry(vf, registration);
-        if (entry == -1)
-        {
-            debug_message(RED "failed (too many concurrent readers)\n" NORMAL);
-            return 0;
-        }
-        if (vf->latestIndex == idx) { break; } // still current - we're protected
-        __sync_bool_compare_and_swap(&vf->readers[entry], registration, 0); // stale, a publish raced us - retry
+        debug_message(RED "failed (no stream in this slot)\n" NORMAL);
+        return 0;
     }
 
-    record->vf           = vf;
-    record->index        = idx;
-    record->readerEntry  = (unsigned int) entry;
-    record->registration = registration;
-    record->inUse        = 1;
+    unsigned int idx = 0;
+    record->registered = 0;
+    if (mapping->bufferCount <= 1)
+    {
+        if (vf->locked)
+        {
+            endMappingUse(mapping);
+            debug_message(RED "failed\n" NORMAL);
+            return 0; // Buffer is locked by a writer
+        }
+    } else
+    {
+        pid_t pid = getpid();
+        uint64_t registration;
+        int entry;
+        for (;;)
+        {
+            idx          = vf->latestIndex;
+            registration = packReaderRegistration(pid, idx);
+            entry        = claimReaderEntry(vf, registration);
+            if (entry == -1)
+            {
+                endMappingUse(mapping);
+                debug_message(RED "failed (too many concurrent readers)\n" NORMAL);
+                return 0;
+            }
+            if (vf->latestIndex == idx) { break; } // still current - we're protected
+            __sync_bool_compare_and_swap(&vf->readers[entry], registration, 0); // stale, a publish raced us - retry
+        }
+
+        if (idx >= mapping->bufferCount)
+        {
+            // The stream was re-created with fewer slots right after we mapped it
+            __sync_bool_compare_and_swap(&vf->readers[entry], registration, 0);
+            endMappingUse(mapping);
+            return 0;
+        }
+        record->registered   = 1;
+        record->readerEntry  = (unsigned int) entry;
+        record->registration = registration;
+    }
+
+    record->vf      = vf;
+    record->mapping = mapping;
+    record->index   = idx;
+    record->inUse   = 1;
     debug_message(GREEN "success\n" NORMAL);
     return 1;
 }
 
-// Stop reading from a video buffer. Legacy mode: no-op, matching the original
-// design (readers never held anything). Multi-buffered mode: releases the
-// registration claimed by the matching startReadingFromVideoBufferPointer()
-// call on this thread.
+// Stop reading from a video buffer: releases the registration (multi-buffered
+// streams) and the mapping claimed by the matching
+// startReadingFromVideoBufferPointer() call on this thread.
 int stopReadingFromVideoBufferPointer(struct VideoFrame *vf)
 {
     if (vf==0) { return 0; }
@@ -1148,8 +1330,12 @@ int stopReadingFromVideoBufferPointer(struct VideoFrame *vf)
     {
         // Compare-and-swap so only this read's own registration is released,
         // even if the entry was cleared (stream re-created) in the meantime.
-        __sync_bool_compare_and_swap(&vf->readers[record->readerEntry], record->registration, 0);
+        if (record->registered)
+        {
+            __sync_bool_compare_and_swap(&vf->readers[record->readerEntry], record->registration, 0);
+        }
         record->inUse = 0;
+        endMappingUse(record->mapping);
     }
     return 1;
 }
