@@ -38,7 +38,7 @@
  *  @section shmvb_threads Threads and processes
  *  - A start/stop pair must be called on the same thread: which slot a read or write uses is
  *    remembered per thread.
- *  - Processes that died mid-read, while creating a stream or while owning a stream are detected
+ *  - Processes that died mid-read, mid-write, while creating a stream or while owning a stream are detected
  *    by PID, so every process sharing a context must see the same PIDs (same PID namespace;
  *    with docker, run containers with --pid host).
  *
@@ -103,7 +103,7 @@ extern "C"
  *  programs built against different layouts refuse to share memory instead of
  *  silently reading each other's fields at the wrong offsets.
  */
-#define SHMVB_CONTEXT_VERSION 2
+#define SHMVB_CONTEXT_VERSION 3
 
 /** @brief Structure to hold video frame metadata: one stream of a SharedMemoryContext.
  *
@@ -126,7 +126,7 @@ struct VideoFrame
 {
     //Shared Data
     //-----------------------------------------------------------------------------------------------------------
-    volatile char locked;              ///< Writer lock (test-and-set): set while a writer is between start/stopWritingToVideoBufferPointer()
+    volatile uint64_t writerLock;      ///< Writer lock, held between start/stopWritingToVideoBufferPointer(): (writer PID << 32) | sequence number of the write, 0 = unlocked
     volatile int is_populated;         ///< 1 while this slot holds a stream, 0 while it's free or being (re)created
     char name[MAX_SHM_NAME+1];         ///< Stream name, as passed to createVideoFrameMetaData() / createGenericMetaData()
     char backingName[MAX_SHM_NAME+1];  ///< shm object holding the pixels: "/<context>.<stream>.<generation>"
@@ -138,7 +138,7 @@ struct VideoFrame
     size_t frame_size;                 ///< Size in bytes of ONE slot/buffer (NOT the total shared memory size when bufferCount>1)
 
     unsigned int bufferCount;                                ///< Number of slots in the backing object (1 to MAX_LOCAL_BUFFERS), fixed when the stream is created
-    unsigned int writeIndex;                                 ///< Slot claimed by the writer; only meaningful while #locked
+    unsigned int writeIndex;                                 ///< Slot claimed by the writer; only meaningful while #writerLock is held
     volatile unsigned int latestIndex;                       ///< Slot most recently published as a complete frame
     volatile uint64_t readers[MAX_READERS_PER_STREAM];       ///< Active reads: (reader PID << 32) | slot, 0 = free entry
     volatile uint64_t timestamps[MAX_LOCAL_BUFFERS];         ///< Per-slot Unix epoch NANOSECONDS (unless a writer passed another value); 0 = no frame published in this slot yet
@@ -354,8 +354,9 @@ int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,unsigned int 
  * @param n Number of bytes to copy, at most VideoFrame::frame_size.
  * @param unix_timestamp Timestamp to associate with the frame, stored as given: by convention nanoseconds
  * since the Unix epoch. Pass 0 to use the current time (nanoseconds).
- * @return 1 on success, 0 if the data was rejected (e.g. n larger than the frame). A rejected copy
- * inside start/stopWritingToVideoBufferPointer() is not published.
+ * @return 1 on success, 0 if the data was rejected (e.g. n larger than the frame, or the stream was
+ * destroyed or re-created since the write started). A rejected copy inside
+ * start/stopWritingToVideoBufferPointer() is not published.
  */
 int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, uint64_t unix_timestamp);
 
@@ -449,7 +450,8 @@ int setLatestVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timest
  * (see MAX_LOCAL_BUFFERS), this claims a free slot other than the one
  * currently published as "latest" - copy_to_shared_memory()/getVideoFrameDataPointer()
  * target that slot automatically until stopWritingToVideoBufferPointer() publishes it.
- * Holds the stream's writer lock until then, so only one writer writes at a time.
+ * Holds the stream's writer lock until then, so only one writer writes at a time. A lock left
+ * behind by a writer whose process exited mid-write is taken over.
  * @param vf Pointer to the video frame structure.
  * @return 1 on success, 0 on failure (timed out waiting for the writer lock, the stream
  * no longer exists, this thread is already writing too many frames, or - only possible under
@@ -465,7 +467,8 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf);
  * stamped with the current time, so it never carries the timestamp of an older frame.
  * @param vf Pointer to the video frame structure.
  * @return 1 on success, 0 if this thread has no write in progress on vf (nothing is
- * published and the writer lock is left alone).
+ * published and the writer lock is left alone), or if the stream was destroyed or re-created
+ * during the write (nothing is published to the new stream and its writer lock is left alone).
  */
 int stopWritingToVideoBufferPointer(struct VideoFrame *vf);
 

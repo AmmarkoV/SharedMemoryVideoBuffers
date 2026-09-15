@@ -205,11 +205,12 @@ int main(int argc, char *argv[])
     // 6. stop_without_start
     if (!(frame = freshStream(ctx, stream_name))) { return 1; }
     unsigned int latestBefore = frame->latestIndex;
-    frame->locked     = 1;                    // another writer is mid-write...
+    uint64_t otherWriter = ((uint64_t) getpid() << 32) | 0xFFFFFFFF;
+    frame->writerLock = otherWriter;          // another (live) writer is mid-write...
     frame->writeIndex = (latestBefore + 1) % frame->bufferCount; // ...on another slot
     check(stopWritingToVideoBufferPointer(frame) == 0, "stop_without_start: reports failure");
-    check(frame->locked == 1 && frame->latestIndex == latestBefore, "stop_without_start: doesn't publish or release another writer's lock");
-    frame->locked = 0;
+    check(frame->writerLock == otherWriter && frame->latestIndex == latestBefore, "stop_without_start: doesn't publish or release another writer's lock");
+    frame->writerLock = 0;
 
     // 7. unlocked_copy
     if (!(frame = freshStream(ctx, stream_name))) { return 1; }

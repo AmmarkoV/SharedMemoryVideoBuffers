@@ -22,6 +22,12 @@
  *  10. local_mapping_bounds  - a local mapping can be released after the stream count
  *                              shrinks, and mapping an empty slot reports failure
  *  11. namespaced_streams    - the same stream name in two contexts means two streams
+ *  12. dead_writer           - a writer that died mid-write doesn't lock the stream's
+ *                              other writers out while its owner is alive
+ *  13. join_keeps_live_lock  - joining a stream whose owner exited doesn't release the
+ *                              writer lock of a writer that is still mid-write
+ *  14. stale_write           - a write in progress while its stream is destroyed and
+ *                              re-created neither publishes to nor unlocks the new stream
  *
  *  Every case runs in its own forked process, so a crash counts as that case failing.
  *
@@ -366,6 +372,125 @@ static void namespaced_streams(const char *ctxName)
     shm_unlink(otherName);
 }
 
+static void dead_writer(const char *ctxName)
+{
+    struct SharedMemoryContext *ctx = freshContext(ctxName);
+    if (!ctx || createVideoFrameMetaData(ctx, "reg12", W, H, C) != 0) { check(0, "dead_writer: setup"); return; }
+    struct VideoFrame *frame = getVideoBufferPointer(ctx, "reg12");
+    writeValue(frame, 1);
+
+    pid_t child = fork();
+    if (child == 0)
+    {
+        struct SharedMemoryContext *childCtx = connectToSharedMemoryContextDescriptor(ctxName);
+        struct VideoFrame *childFrame = getVideoBufferPointer(childCtx, "reg12");
+        _exit(startWritingToVideoBufferPointer(childFrame) ? 0 : 1); // dies mid-write
+    }
+    int started = (childExitStatus(child) == 0);
+    check(started && writeValue(frame, 2) && readValue(frame) == 2, "dead_writer: a writer that died mid-write doesn't lock the owner out");
+    destroyVideoFrame(ctx, "reg12");
+}
+
+static void join_keeps_live_lock(const char *ctxName)
+{
+    struct SharedMemoryContext *ctx = freshContext(ctxName);
+    int toWriter[2], fromWriter[2];
+    if (!ctx || pipe(toWriter) != 0 || pipe(fromWriter) != 0) { check(0, "join_keeps_live_lock: setup"); return; }
+
+    pid_t owner = fork();
+    if (owner == 0)
+    {
+        struct SharedMemoryContext *ownerCtx = connectToSharedMemoryContextDescriptor(ctxName);
+        if (createVideoFrameMetaData(ownerCtx, "reg13", W, H, C) != 0) { _exit(1); }
+        writeValue(getVideoBufferPointer(ownerCtx, "reg13"), 1);
+        _exit(0); // exits without destroying its stream
+    }
+    if (childExitStatus(owner) != 0) { check(0, "join_keeps_live_lock: setup"); return; }
+
+    pid_t writer = fork();
+    if (writer == 0)
+    {
+        char token;
+        close(toWriter[1]);
+        close(fromWriter[0]);
+        struct SharedMemoryContext *writerCtx = connectToSharedMemoryContextDescriptor(ctxName);
+        struct VideoFrame *writerFrame = getVideoBufferPointer(writerCtx, "reg13");
+        unsigned char buf[W*H*C];
+        memset(buf, 2, sizeof(buf));
+        if (!startWritingToVideoBufferPointer(writerFrame)) { _exit(1); }
+        write(fromWriter[1], "w", 1);
+        read(toWriter[0], &token, 1); // stays mid-write while the parent joins
+        int ok = copy_to_shared_memory(writerFrame, buf, sizeof(buf), 2) && stopWritingToVideoBufferPointer(writerFrame);
+        _exit(ok ? 0 : 1);
+    }
+    close(toWriter[0]);
+    close(fromWriter[1]);
+
+    char token;
+    if (read(fromWriter[0], &token, 1) != 1) { check(0, "join_keeps_live_lock: writer died during setup"); return; }
+    int joined = (createVideoFrameMetaData(ctx, "reg13", W, H, C) == 0);
+    struct VideoFrame *frame = getVideoBufferPointer(ctx, "reg13");
+    int secondWriter = (frame != NULL) && startWritingToVideoBufferPointer(frame);
+    if (secondWriter) { stopWritingToVideoBufferPointer(frame); }
+    check(joined && !secondWriter, "join_keeps_live_lock: joining doesn't let a second writer in while a live writer is mid-write");
+    write(toWriter[1], "g", 1);
+    check(childExitStatus(writer) == 0 && readValue(frame) == 2, "join_keeps_live_lock: the live writer still publishes its frame");
+    destroyVideoFrame(ctx, "reg13");
+}
+
+static void stale_write(const char *ctxName)
+{
+    struct SharedMemoryContext *ctx = freshContext(ctxName);
+    int toWriter[2], fromWriter[2];
+    if (!ctx || createVideoFrameMetaData(ctx, "reg14", W, H, C) != 0 || pipe(toWriter) != 0 || pipe(fromWriter) != 0)
+    { check(0, "stale_write: setup"); return; }
+
+    pid_t writer = fork();
+    if (writer == 0)
+    {
+        char token;
+        close(toWriter[1]);
+        close(fromWriter[0]);
+        struct SharedMemoryContext *writerCtx = connectToSharedMemoryContextDescriptor(ctxName);
+        struct VideoFrame *writerFrame = getVideoBufferPointer(writerCtx, "reg14");
+        unsigned char buf[W*H*C];
+        memset(buf, 7, sizeof(buf));
+        if (!startWritingToVideoBufferPointer(writerFrame)) { _exit(4); }
+        write(fromWriter[1], "w", 1);
+        read(toWriter[0], &token, 1); // the parent re-creates the stream meanwhile
+        int copied  = copy_to_shared_memory(writerFrame, buf, sizeof(buf), 7);
+        int stopped = stopWritingToVideoBufferPointer(writerFrame);
+        _exit((copied ? 1 : 0) | (stopped ? 2 : 0));
+    }
+    close(toWriter[0]);
+    close(fromWriter[1]);
+
+    char token;
+    if (read(fromWriter[0], &token, 1) != 1) { check(0, "stale_write: writer died during setup"); return; }
+    destroyVideoFrame(ctx, "reg14");
+    createVideoFrameMetaData(ctx, "reg14", W, H, C);
+    struct VideoFrame *frame = getVideoBufferPointer(ctx, "reg14");
+    int holding = (frame != NULL) && startWritingToVideoBufferPointer(frame); // the new stream's own writer
+    write(toWriter[1], "g", 1);
+    int status = childExitStatus(writer);
+    if (!holding || status == 255 || (status & 4)) { check(0, "stale_write: setup"); return; }
+
+    check(!(status & 1), "stale_write: copying into a stream re-created during the write is rejected");
+    check(!(status & 2), "stale_write: stopping that write reports failure");
+    int readable = startReadingFromVideoBufferPointer(frame);
+    if (readable) { stopReadingFromVideoBufferPointer(frame); }
+    check(!readable, "stale_write: nothing is published to the new stream");
+    int secondWriter = startWritingToVideoBufferPointer(frame); // same thread: only possible if our lock was released
+    check(!secondWriter, "stale_write: the new stream's writer lock is left to its holder");
+    unsigned char buf[W*H*C];
+    memset(buf, 8, sizeof(buf));
+    copy_to_shared_memory(frame, buf, sizeof(buf), 8);
+    stopWritingToVideoBufferPointer(frame);
+    if (secondWriter) { stopWritingToVideoBufferPointer(frame); }
+    check(readValue(frame) == 8, "stale_write: the new stream's own writer publishes normally");
+    destroyVideoFrame(ctx, "reg14");
+}
+
 // ---------------------------------------------------------------------------
 
 static void runCase(void (*body)(const char *), const char *label, int number)
@@ -405,6 +530,9 @@ int main()
     runCase(concurrent_creates,   "concurrent_creates",    9);
     runCase(local_mapping_bounds, "local_mapping_bounds", 10);
     runCase(namespaced_streams,   "namespaced_streams",   11);
+    runCase(dead_writer,          "dead_writer",          12);
+    runCase(join_keeps_live_lock, "join_keeps_live_lock", 13);
+    runCase(stale_write,          "stale_write",          14);
     fprintf(stderr, "registry_edge_cases: %d failure(s)\n", failures);
     return failures > 0 ? 2 : 0;
 }

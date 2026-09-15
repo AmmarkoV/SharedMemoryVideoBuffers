@@ -362,6 +362,8 @@ struct tlsWriteEntry
 {
     const struct VideoFrame *vf;        ///< Frame being written (this thread holds its writer lock)
     struct localStreamMapping *mapping; ///< This process's mapping the write uses, kept mapped until stop
+    uint64_t lockToken; ///< Value this write stored in VideoFrame::writerLock, so stop only ever releases its own lock
+    unsigned int slot;  ///< Slot this write claimed
     int aborted; ///< Last copy_to_shared_memory() of this write was rejected
     int stamped; ///< This write set the slot's timestamp; otherwise stop stamps the current time
     int inUse;   ///< 1 if this table entry holds a write, 0 if it is free
@@ -395,6 +397,20 @@ static struct tlsWriteEntry * tlsWriteFindFree()
         if (!tlsWriteTable[i].inUse) { return &tlsWriteTable[i]; }
     }
     return NULL;
+}
+
+/**
+ * @brief Checks whether the stream a write started on still holds vf's slot.
+ *
+ * Once it was destroyed or re-created, the slot's timestamps, latestIndex and writer lock
+ * belong to another stream, which the write must leave alone.
+ * @param vf Frame being written.
+ * @param writeRecord This thread's write in progress on vf.
+ * @return 1 if the slot still holds the generation the write mapped, 0 otherwise.
+ */
+static int writeTargetsCurrentStream(const struct VideoFrame *vf, const struct tlsWriteEntry *writeRecord)
+{
+    return vf->is_populated && (vf->generation == writeRecord->mapping->generation);
 }
 
 // ---------------------------------------------------------------------------
@@ -667,9 +683,13 @@ int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, u
         unsigned int slot = 0;
         if (writeRecord != NULL)
         {
-            slot     = frame->writeIndex;
-            capacity = writeRecord->mapping->frameSize;
-            target   = writeRecord->mapping->base + ((size_t) slot * capacity);
+            // Nothing to write to once the stream was destroyed or re-created during this write
+            if (writeTargetsCurrentStream(frame, writeRecord))
+            {
+                slot     = writeRecord->slot;
+                capacity = writeRecord->mapping->frameSize;
+                target   = writeRecord->mapping->base + ((size_t) slot * capacity);
+            }
         } else
         {
             unsigned int bufferCount = 0;
@@ -691,7 +711,7 @@ int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, u
              if (writeRecord != NULL) { writeRecord->aborted = 0; writeRecord->stamped = 1; }
              return 1;
            } else { fprintf(stderr,"copy_to_shared_memory: Will not overflow target \n"); }
-        } else { fprintf(stderr,"copy_to_shared_memory: Stream %s has no memory mapped \n",frame->name); }
+        } else { fprintf(stderr,"copy_to_shared_memory: Stream %s has no memory mapped, or was re-created during this write \n",frame->name); }
     } else { fprintf(stderr,"copy_to_shared_memory: No Target VideoFrame our valid source \n"); }
 
   // The claimed slot still holds an older frame - don't let the matching
@@ -967,8 +987,8 @@ static int createBackingObject(const char *backingName, size_t size)
  * @brief Creates streamName, joins it if it already exists with the same size, or
  * replaces it if its size differs and its owner is this process or has exited.
  *
- * Joining a stream whose owner exited makes this process its owner and releases
- * the writer lock the owner may have died holding.
+ * Joining a stream whose owner exited makes this process its owner. A writer lock
+ * the owner died holding is taken over by the next writer (see acquireWriterLock()).
  * Backs createVideoFrameMetaData() and createGenericMetaData().
  * @param context Shared memory context.
  * @param streamName Stream name: not empty, shorter than MAX_SHM_NAME, no '/'.
@@ -1007,9 +1027,10 @@ static int registerStream(struct SharedMemoryContext* context,const char * strea
             fprintf(stderr,"Stream %s already exists, joining it\n",streamName);
             if (ownerExited)
             {
-                // Its creator is gone, possibly mid-write: take the stream over
+                // Its creator is gone: take the stream over. The writer lock is left alone,
+                // another process may be mid-write; a lock the creator died holding is
+                // taken over by the next writer.
                 existing->ownerPid = getpid();
-                __sync_lock_release(&existing->locked);
             }
             releaseRegistryLock(context);
             return EXIT_SUCCESS;
@@ -1083,8 +1104,8 @@ static int registerStream(struct SharedMemoryContext* context,const char * strea
     {
         frame->readers[i] = 0;
     }
-    frame->locked   = 0;
-    frame->ownerPid = getpid();
+    frame->writerLock = 0;
+    frame->ownerPid   = getpid();
 
     int result = EXIT_FAILURE;
     if (createBackingObject(backingName, frameSize * bufferCount))
@@ -1135,7 +1156,7 @@ unsigned char * getVideoFrameDataPointer(struct VideoFrame * frame)
     struct tlsWriteEntry *writeRecord = tlsWriteFind(frame);
     if (writeRecord != NULL)
     {
-        return writeRecord->mapping->base + ((size_t) frame->writeIndex * writeRecord->mapping->frameSize);
+        return writeRecord->mapping->base + ((size_t) writeRecord->slot * writeRecord->mapping->frameSize);
     }
 
     // A reader gets whichever slot *this thread* latched onto via a matching
@@ -1213,10 +1234,19 @@ void setVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timestamp)
   {
     // Only meaningful while a write is in flight (between start/stopWriting),
     // matching how copy_to_shared_memory stamps the slot it just wrote.
-    frame->timestamps[frame->writeIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampNanoseconds();
-    // Tell stopWritingToVideoBufferPointer() not to replace this timestamp with the current time
+    uint64_t timestamp = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampNanoseconds();
     struct tlsWriteEntry *writeRecord = tlsWriteFind(frame);
-    if (writeRecord != NULL) { writeRecord->stamped = 1; }
+    if (writeRecord != NULL)
+    {
+        // A stream re-created during this write isn't ours to stamp
+        if (writeTargetsCurrentStream(frame, writeRecord)) { frame->timestamps[writeRecord->slot] = timestamp; }
+        // Tell stopWritingToVideoBufferPointer() not to replace this timestamp with the current time
+        writeRecord->stamped = 1;
+        return;
+    }
+    unsigned int index = frame->writeIndex;
+    if (index >= MAX_LOCAL_BUFFERS) { index = 0; } // writeIndex is shared memory: never index past timestamps
+    frame->timestamps[index] = timestamp;
   }
 }
 
@@ -1319,21 +1349,49 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
     return context;
 }
 
+/** @brief Sequence numbers of this process's writer lock tokens, so no two writes of one process hold the same token. */
+static uint32_t writerLockSequence = 0;
+
 /**
- * @brief Takes a stream's writer lock (VideoFrame::locked).
+ * @brief Takes a stream's writer lock (VideoFrame::writerLock).
  *
- * Spins until the writer lock is ours, or gives up after ATTEMPTS_TO_LOCK_A_BUFFER tries.
+ * The lock holds a token unique to this write, (PID << 32) | sequence number: the PID lets a
+ * lock left by a writer that died mid-write be taken over, and the sequence number keeps
+ * other writes of this process (other threads, or a write that outlived a re-created stream)
+ * from releasing it. Spins until the lock is ours, or gives up after ATTEMPTS_TO_LOCK_A_BUFFER tries.
  * @param vf Stream.
+ * @param[out] token The token now stored in the lock, to pass to releaseWriterLock().
  * @return 1 once the lock is held, 0 on timeout.
  */
-static int acquireWriterLock(struct VideoFrame *vf)
+static int acquireWriterLock(struct VideoFrame *vf, uint64_t *token)
 {
+    uint64_t ours = ((uint64_t) (uint32_t) getpid() << 32) | __sync_add_and_fetch(&writerLockSequence, 1);
     for (int attempts=0; attempts<ATTEMPTS_TO_LOCK_A_BUFFER; attempts++)
     {
-      if (!__sync_lock_test_and_set(&vf->locked, 1)) { return 1; }
+      if (__sync_bool_compare_and_swap(&vf->writerLock, 0, ours)) { *token = ours; return 1; }
+      // Held: take it over only if its writer died, and only if nobody else took it over first
+      uint64_t holder = vf->writerLock;
+      if ((holder != 0) && processIsDead((pid_t) (holder >> 32)) && __sync_bool_compare_and_swap(&vf->writerLock, holder, ours))
+      {
+          fprintf(stderr,"Took over the writer lock of stream %s from a dead writer (pid %d)\n",vf->name,(pid_t) (holder >> 32));
+          *token = ours;
+          return 1;
+      }
       usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
     }
     return 0;
+}
+
+/**
+ * @brief Releases a stream's writer lock, if it still holds token.
+ *
+ * Harmless once the lock was taken over or the stream re-created: the lock is then someone else's.
+ * @param vf Stream.
+ * @param token Token returned by acquireWriterLock().
+ */
+static void releaseWriterLock(struct VideoFrame *vf, uint64_t token)
+{
+    __sync_bool_compare_and_swap(&vf->writerLock, token, 0);
 }
 
 // Start writing to a video buffer
@@ -1344,7 +1402,8 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
     debug_message("startWritingToVideoBufferPointer :");
     int attempts = 0;
 
-    if (!acquireWriterLock(vf))
+    uint64_t lockToken = 0;
+    if (!acquireWriterLock(vf, &lockToken))
     {
         debug_message(RED "failed\n" NORMAL);
         return 0; // Buffer is already locked and we timed out waiting for it
@@ -1355,9 +1414,15 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
     // without a mapping (the stream is gone) there's nowhere to write.
     struct tlsWriteEntry *writeRecord = tlsWriteFindFree();
     struct localStreamMapping *mapping = (writeRecord != NULL) ? beginMappingUse(vf) : NULL;
+    // Re-created between taking its lock and mapping it: the lock we took went with the old stream
+    if ((mapping != NULL) && (vf->writerLock != lockToken))
+    {
+        endMappingUse(mapping);
+        mapping = NULL;
+    }
     if (mapping == NULL)
     {
-        __sync_lock_release(&vf->locked);
+        releaseWriterLock(vf, lockToken);
         debug_message(RED "failed\n" NORMAL);
         return 0;
     }
@@ -1368,7 +1433,7 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
     {
         // Multi-buffering: claim a slot that isn't the currently-published one and
         // has no active readers, so this write can never clobber a frame a reader
-        // is still copying out. `locked` (held for the remainder of this write)
+        // is still copying out. The writer lock (held for the remainder of this write)
         // already serializes this search against any other writer, so a plain
         // read of readers[] here is safe - no reader ever registers on a slot
         // other than the live vf->latestIndex, and that can't change while we
@@ -1401,7 +1466,7 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
             // video framerates. Give up without touching any data (frame dropped,
             // never corrupted) and release the writer lock we're holding.
             endMappingUse(mapping);
-            __sync_lock_release(&vf->locked);
+            releaseWriterLock(vf, lockToken);
             debug_message(RED "failed\n" NORMAL);
             return 0;
         }
@@ -1411,9 +1476,11 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
 
     // Remember this write on this thread, so copy_to_shared_memory()/getVideoFrameDataPointer()
     // target the claimed slot and the matching stop can find the mapping
-    writeRecord->vf      = vf;
-    writeRecord->mapping = mapping;
-    writeRecord->aborted = 0;
+    writeRecord->vf        = vf;
+    writeRecord->mapping   = mapping;
+    writeRecord->lockToken = lockToken;
+    writeRecord->slot      = chosen;
+    writeRecord->aborted   = 0;
     writeRecord->stamped = 0;
     writeRecord->inUse   = 1;
 
@@ -1440,26 +1507,34 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
     int aborted = writeRecord->aborted;
     struct localStreamMapping *mapping = writeRecord->mapping;
     writeRecord->inUse = 0;
+    // Destroyed or re-created during this write: the slot's timestamps, latestIndex and
+    // writer lock belong to the new stream now, so publish nothing
+    int stale = !writeTargetsCurrentStream(vf, writeRecord);
 
     // A writer that filled the slot in place without setting a timestamp would
     // otherwise publish the timestamp of the older frame this slot last held
-    if ((!aborted) && (!writeRecord->stamped))
+    if ((!aborted) && (!stale) && (!writeRecord->stamped))
     {
-        vf->timestamps[vf->writeIndex] = getUnixTimestampNanoseconds();
+        vf->timestamps[writeRecord->slot] = getUnixTimestampNanoseconds();
     }
 
-    if ((mapping->bufferCount > 1) && (!aborted))
+    if ((mapping->bufferCount > 1) && (!aborted) && (!stale))
     {
         // Publish: make the just-written slot the one readers will latch onto.
         // The barrier ensures the memcpy done under copy_to_shared_memory is
         // visible to any thread that observes the new latestIndex.
         __sync_synchronize();
-        vf->latestIndex = vf->writeIndex;
+        vf->latestIndex = writeRecord->slot;
         __sync_synchronize();
     }
 
-    __sync_lock_release(&vf->locked);
+    releaseWriterLock(vf, writeRecord->lockToken);
     endMappingUse(mapping);
+    if (stale)
+    {
+        debug_message(RED "failed (stream re-created during the write)\n" NORMAL);
+        return 0;
+    }
     debug_message(GREEN "success\n" NORMAL);
     return 1;
 }
@@ -1469,13 +1544,14 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
 int setLatestVideoFrameTimestamp(struct VideoFrame *vf, uint64_t unix_timestamp)
 {
     if (vf==0) { return 0; }
-    if (!acquireWriterLock(vf)) { return 0; }
+    uint64_t lockToken = 0;
+    if (!acquireWriterLock(vf, &lockToken)) { return 0; }
     unsigned int index = vf->latestIndex;
     if (index >= MAX_LOCAL_BUFFERS) { index = 0; }
     // Stamping a slot that never held a published frame would make it readable
     int published = (vf->timestamps[index] != 0);
     if (published) { vf->timestamps[index] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampNanoseconds(); }
-    __sync_lock_release(&vf->locked);
+    releaseWriterLock(vf, lockToken);
     return published;
 }
 
@@ -1519,7 +1595,7 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
     record->registered = 0;
     if (mapping->bufferCount <= 1)
     {
-        if ((vf->locked) || (vf->timestamps[0] == 0))
+        if ((vf->writerLock != 0) || (vf->timestamps[0] == 0))
         {
             endMappingUse(mapping);
             debug_message(RED "failed\n" NORMAL);

@@ -11,7 +11,7 @@ Publisher(s)  ──write──►  Shared Memory Context  ──read──►  
                            (up to 10 named buffers)
 ```
 
-One or more publisher processes write raw pixel data into named shared memory buffers. Consumer or server processes read those buffers concurrently. Access is coordinated via a spin-lock on a `locked` flag embedded in each `VideoFrame` struct.
+One or more publisher processes write raw pixel data into named shared memory buffers. Consumer or server processes read those buffers concurrently. Writers are coordinated via a spin-lock embedded in each `VideoFrame` struct; it records the writer's PID, so a lock left by a writer that crashed mid-write is taken over.
 
 Supported data types:
 - **Video frames** — width × height × channels raw pixel data

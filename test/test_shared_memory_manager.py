@@ -132,11 +132,12 @@ def main():
     writer.set_timestamp(777)
     check(reader.get_timestamp() == 777, "set_timestamp: latest frame carries the new timestamp")
     check(np.all(reader.read_from_shared_memory() == 5), "set_timestamp: latest frame's pixels are unchanged")
-    lockByte = ctypes.c_char.from_address(writer.frame)  # VideoFrame.locked is the struct's first field
-    lockByte.value = b"\x01"                              # another writer is mid-write
+    lockField = ctypes.c_uint64.from_address(writer.frame)  # VideoFrame.writerLock is the struct's first field
+    otherWriter = (os.getpid() << 32) | 0xFFFFFFFF           # another (live) writer is mid-write
+    lockField.value = otherWriter
     failedWhileLocked = raised(RuntimeError, lambda: writer.set_timestamp(888))
-    stillLocked = lockByte.value == b"\x01"
-    lockByte.value = b"\x00"
+    stillLocked = lockField.value == otherWriter
+    lockField.value = 0
     check(failedWhileLocked and stillLocked, "set_timestamp: doesn't release a writer lock held by someone else")
     beforeWrite = time.time_ns()
     writer.copy_numpy_to_shared_memory(solidFrame(6))
