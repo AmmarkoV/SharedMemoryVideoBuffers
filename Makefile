@@ -1,6 +1,10 @@
 CC = gcc
-CFLAGS        = -Wall -O2 -pthread -lrt -lm -g
+CFLAGS        = -Wall -O2 -pthread -g
 LDFLAGS       = -shared -fPIC -g
+# Libraries go after the objects on every link line: linkers using --as-needed (the
+# default on Ubuntu and others) drop a library listed before the objects that need it,
+# and before glibc 2.34 shm_open/shm_unlink live in librt, not libc
+LDLIBS        = -pthread -lrt -lm
 X11LIBS       = -lX11
 OBJ_DIR       = obj
 
@@ -29,22 +33,22 @@ test:
 	./test/run_tests.sh
 
 server: $(SERVER_OBJ)
-	$(CC) -o $@ $(CFLAGS) $^
+	$(CC) -o $@ $(CFLAGS) $^ $(LDLIBS)
 
 client: $(CLIENT_OBJ)
-	$(CC) -o $@ $(CFLAGS) $^
+	$(CC) -o $@ $(CFLAGS) $^ $(LDLIBS)
 
 consumer: $(CONSUMER_OBJ)
-	$(CC) -o $@ $(CFLAGS) $^
+	$(CC) -o $@ $(CFLAGS) $^ $(LDLIBS)
 
 publisher: $(PUBLISHER_OBJ)
-	$(CC) -o $@ $(CFLAGS) $^
+	$(CC) -o $@ $(CFLAGS) $^ $(LDLIBS)
 
 viewer: $(VIEWER_OBJ)
-	$(CC) -o $@ $^ $(X11LIBS) -pthread
+	$(CC) -o $@ $^ $(X11LIBS) $(LDLIBS)
 
 $(LIBRARY_NAME): $(LIBRARY_OBJ)
-	$(CC) $(LDFLAGS)  $^ -o $@ $(CFLAGS) 
+	$(CC) $(LDFLAGS)  $^ -o $@ $(CFLAGS) $(LDLIBS)
 
 $(OBJ_DIR)/%.o: src/c/%.c
 	mkdir -p $(OBJ_DIR)

@@ -44,7 +44,7 @@ make install      # Install library to /usr/local/lib and run ldconfig
 make clean        # Remove all build artefacts
 ```
 
-Compiler flags: `-Wall -pthread -lrt -lm -g`
+Compiler flags: `-Wall -O2 -pthread -g`, linked with `-pthread -lrt -lm` (after the objects, so it also links on glibc < 2.34)
 Object files land in `obj/`. The shared library is built as `libSharedMemoryVideoBuffers.so`.
 
 ### CMake (alternative)
