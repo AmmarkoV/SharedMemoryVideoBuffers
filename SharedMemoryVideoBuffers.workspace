@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
 <CodeBlocks_workspace_file>
 	<Workspace title="Workspace">
-		<Project filename="SharedMemoryVideoBuffersServer.cbp" />
-		<Project filename="SharedMemoryVideoBuffersClient.cbp" />
-		<Project filename="SharedMemoryVideoBuffersViewer.cbp" />
-		<Project filename="SharedMemoryVideoBuffersConsumer.cbp" />
+		<Project filename="src/project/SharedMemoryVideoBuffersServer.cbp" />
+		<Project filename="src/project/SharedMemoryVideoBuffersClient.cbp" />
+		<Project filename="src/project/SharedMemoryVideoBuffersViewer.cbp" />
+		<Project filename="src/project/SharedMemoryVideoBuffersConsumer.cbp" />
 		<Project filename="../ComputerVisionServer/src/WebServer/WebServer.cbp" />
 		<Project filename="../AmmarServer/src/AmmServerlib/AmmServerlib.cbp" />
 	</Workspace>

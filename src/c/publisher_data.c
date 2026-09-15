@@ -52,7 +52,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    struct VideoFrameLocalMapping localMap={0};
+    //struct VideoFrameLocalMapping localMap={0};
     if (map_frame_shared_memory(frame,1) == NULL)  //We want to overwrite the frame->data because we are the client and this makes the python API easier
     {
         return EXIT_FAILURE;

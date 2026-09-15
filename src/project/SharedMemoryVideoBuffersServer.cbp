@@ -2,13 +2,14 @@
 <CodeBlocks_project_file>
 	<FileVersion major="1" minor="6" />
 	<Project>
-		<Option title="SharedMemoryVideoBuffersViewer" />
+		<Option title="SharedMemoryVideoBuffersServer" />
 		<Option pch_mode="2" />
 		<Option compiler="gcc" />
 		<Build>
 			<Target title="Debug">
-				<Option output="./viewer" prefix_auto="1" extension_auto="1" />
-				<Option object_output="obj/Debug/" />
+				<Option output="../../server" prefix_auto="1" extension_auto="1" />
+				<Option object_output="../../obj/Debug/" />
+				<Option working_dir="../../" />
 				<Option type="1" />
 				<Option compiler="gcc" />
 				<Compiler>
@@ -16,8 +17,9 @@
 				</Compiler>
 			</Target>
 			<Target title="Release">
-				<Option output="./viewer" prefix_auto="1" extension_auto="1" />
-				<Option object_output="obj/Release/" />
+				<Option output="../../server" prefix_auto="1" extension_auto="1" />
+				<Option object_output="../../obj/Release/" />
+				<Option working_dir="../../" />
 				<Option type="1" />
 				<Option compiler="gcc" />
 				<Compiler>
@@ -30,17 +32,20 @@
 		</Build>
 		<Compiler>
 			<Add option="-Wall" />
+			<Add option="-pthread" />
 		</Compiler>
 		<Linker>
-			<Add option="-lX11" />
+			<Add option="-pthread" />
+			<Add library="rt" />
+			<Add library="m" />
 		</Linker>
-		<Unit filename="src/c/sharedMemoryVideoBuffers.c">
+		<Unit filename="../c/server.c">
 			<Option compilerVar="CC" />
 		</Unit>
-		<Unit filename="src/c/sharedMemoryVideoBuffers.h" />
-		<Unit filename="src/c/viewer.c">
+		<Unit filename="../c/sharedMemoryVideoBuffers.c">
 			<Option compilerVar="CC" />
 		</Unit>
+		<Unit filename="../c/sharedMemoryVideoBuffers.h" />
 		<Extensions />
 	</Project>
 </CodeBlocks_project_file>
