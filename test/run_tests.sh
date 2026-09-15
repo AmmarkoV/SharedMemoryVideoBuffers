@@ -10,7 +10,7 @@
 #                                            ever belong to a different frame
 #                                            than the pixel data it's paired with?
 #
-# Each pair is run once with the shipped default (double buffering) - that run
+# Each pair is run once with the shipped default (4 slots per stream) - that run
 # MUST show zero torn frames / zero mismatches, and failing it fails this
 # script. It's also run once with SHMVB_BUFFER_COUNT=1 (multi-buffering
 # disabled) purely to demonstrate the tests can actually detect the problem
@@ -65,7 +65,7 @@ run_case()
     rm -f "/dev/shm/$shm"* # the context and its streams' "<context>.<stream>.<generation>" objects
 
     echo ""
-    echo "=== $label (SHMVB_BUFFER_COUNT=${buffer_count:-<default: 2>}) ==="
+    echo "=== $label (SHMVB_BUFFER_COUNT=${buffer_count:-<default: 4>}) ==="
 
     if [ -n "$buffer_count" ]; then export SHMVB_BUFFER_COUNT="$buffer_count"; else unset SHMVB_BUFFER_COUNT; fi
 

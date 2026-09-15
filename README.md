@@ -63,7 +63,7 @@ CMake mirrors all Makefile targets and uses the same compiler flags.
 
 ### `server` — Frame saver
 
-Reads all populated shared memory buffers and writes them to disk as PNM images.
+Reads all populated shared memory buffers and writes them to disk as PNM images. A debugging tool: `--nokb` writes a file per stream every 100 ms, so don't run it in production. Publishers don't need it running: `SharedMemoryManager` publishers and the C `client`, `viewer` and `publisher_data` create the context themselves.
 
 ```bash
 ./server           # Interactive: press Enter to snapshot all buffers
@@ -145,7 +145,7 @@ smm = SharedMemoryManager(
     connect=False,          # False = create/write
     width=640, height=480, channels=3
 )
-smm.copy_numpy_to_shared_memory(numpy_array)
+ok = smm.copy_numpy_to_shared_memory(numpy_array)   # False = frame dropped, every slot was busy
 
 # Consumer / client mode
 smm = SharedMemoryManager(
@@ -164,7 +164,7 @@ with smm.read_frame() as view:          # view is a read-only numpy array, or No
 
 `read_frame()` keeps the frame's slot protected until the block exits, so `view` can't change while you use it:
 
-- **Keep the block short.** With the default of 2 slots per stream, the publisher can write one more frame while a block is open and then blocks. Its `copy_numpy_to_shared_memory` raises if the block outlasts the lock timeout. Use `read_from_shared_memory()` for slow processing, or create the stream with a higher `SHMVB_BUFFER_COUNT` (up to 4).
+- **Don't hold many frames at once.** A stream has 4 slots by default (`SHMVB_BUFFER_COUNT`, 1-4, set by the process that creates the stream): the latest frame, the one being written, and two more. So up to two readers can hold older frames without slowing the publisher. When readers hold every slot, the publisher waits up to the lock timeout, then drops the frame (`copy_numpy_to_shared_memory` returns `False`).
 - **Don't use `view` after the block.** The writer will reuse the slot, so copy anything you want to keep (`view.copy()`).
 - **Don't read the same manager again inside the block.** `read_frame()`, `read_from_shared_memory()` and `get_timestamp()` raise `RuntimeError` there, because a second read would release the block's protection.
 - Exit the block on the same thread that entered it.
@@ -292,7 +292,7 @@ python3 src/python/screenStream.py <x> <y> <w> <h>       # capture region
 ### Quickstart (Python)
 
 ```bash
-# Terminal 1 — start the server
+# Terminal 1 (optional) — snapshot streams to disk for debugging
 python3 src/python/SharedMemoryServer.py
 
 # Terminal 2 — stream a video file

@@ -44,13 +44,16 @@ static void debug_message(const char *format, ...)
 
 // How many physical slots (MAX_LOCAL_BUFFERS ceiling) each newly created stream
 // gets. Configurable via SHMVB_BUFFER_COUNT so existing deployments can opt out
-// (set to 1) without any code change; defaults to 2 (double buffering).
+// (set to 1) without any code change; defaults to MAX_LOCAL_BUFFERS. With only
+// 2 slots, one reader holding an older frame leaves the writer nowhere to write,
+// so it stalls until the lock timeout and drops the frame; every extra slot lets
+// one more slow reader hold a frame without stalling the writer.
 static unsigned int getConfiguredBufferCount()
 {
     static int cached = -1;
     if (cached == -1)
     {
-        int n = 2;
+        int n = MAX_LOCAL_BUFFERS;
         const char * env = getenv("SHMVB_BUFFER_COUNT");
         if (env != NULL)
         {
@@ -522,9 +525,24 @@ int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, u
   struct tlsWriteEntry *writeRecord = tlsWriteFind(frame);
   if ( (frame!=0) && (src!=0) && (n!=0) )
     {
-        // Inside start/stopWritingToVideoBufferPointer() this is the claimed slot
-        unsigned char *target = getVideoFrameDataPointer(frame);
-        size_t capacity = (writeRecord != NULL) ? writeRecord->mapping->frameSize : frame->frame_size;
+        // Inside start/stopWritingToVideoBufferPointer() this is the claimed slot,
+        // outside it (unprotected) the latest one
+        unsigned char *target = NULL;
+        size_t capacity = 0;
+        unsigned int slot = 0;
+        if (writeRecord != NULL)
+        {
+            slot     = frame->writeIndex;
+            capacity = writeRecord->mapping->frameSize;
+            target   = writeRecord->mapping->base + ((size_t) slot * capacity);
+        } else
+        {
+            unsigned int bufferCount = 0;
+            unsigned char *base = currentMappingBase(frame, NULL, &capacity, &bufferCount);
+            slot = frame->latestIndex;
+            if (slot >= bufferCount) { slot = 0; }
+            if (base != NULL) { target = base + ((size_t) slot * capacity); }
+        }
         if (target!=0)
         {
            if (capacity >= n)
@@ -534,7 +552,7 @@ int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, u
              // Stamped per-slot (not a single shared field) so a reader holding
              // an older slot never sees a timestamp that belongs to a newer,
              // not-yet-visible-to-them frame.
-             frame->timestamps[frame->writeIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
+             frame->timestamps[slot] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
              if (writeRecord != NULL) { writeRecord->aborted = 0; }
              return 1;
            } else { fprintf(stderr,"copy_to_shared_memory: Will not overflow target \n"); }
@@ -646,33 +664,36 @@ int createSharedMemoryContextDescriptor(const char *path)
         return -1;
     }
 
-    int created = 1;
-    int shm_fd = shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0666);
-    if ((shm_fd == -1) && (errno == EEXIST))
+    size_t total_size = sizeof(struct SharedMemoryContext);
+    int shm_fd = -1;
+    for (int attempts=0; (shm_fd == -1) && (attempts<3); attempts++)
     {
-        created = 0;
-        shm_fd  = shm_open(path, O_RDWR, 0666);
+        shm_fd = shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0666);
+        if ((shm_fd == -1) && (errno == EEXIST))
+        {
+            int existing_fd = shm_open(path, O_RDWR, 0666);
+            if (existing_fd == -1) { continue; } // removed meanwhile, create it
+            // Keep a context this build can use, streams and all - several programs
+            // call this at startup and must not wipe each other's streams
+            struct SharedMemoryContext *existing = mapCompatibleContext(existing_fd);
+            close(existing_fd);
+            if (existing != NULL)
+            {
+                munmap(existing, total_size);
+                return 0;
+            }
+            // Laid out by an incompatible build. Resizing or clearing it in place would
+            // crash (SIGBUS) or corrupt the programs still using it, so replace it with
+            // a new object instead: they keep the old one until they exit.
+            fprintf(stderr,"Shared memory context %s has an incompatible layout, replacing it\n",path);
+            shm_unlink(path);
+        }
     }
     if (shm_fd == -1)
     {
         fprintf(stderr,RED "shm_open\n" NORMAL);
         //perror("shm_open");
         return -1;
-    }
-
-    size_t total_size = sizeof(struct SharedMemoryContext);
-    if (!created)
-    {
-        // Keep a context this build can use, streams and all - several programs
-        // call this at startup and must not wipe each other's streams
-        struct SharedMemoryContext *existing = mapCompatibleContext(shm_fd);
-        if (existing != NULL)
-        {
-            munmap(existing, total_size);
-            close(shm_fd);
-            return 0;
-        }
-        fprintf(stderr,"Shared memory context %s has an incompatible layout, re-initializing it\n",path);
     }
 
     if (ftruncate(shm_fd, total_size) == -1)
@@ -1198,13 +1219,20 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
     debug_message("stopWritingToVideoBufferPointer :");
 
     struct tlsWriteEntry *writeRecord = tlsWriteFind(vf);
+    // No matching start on this thread: the writer lock (if held at all) belongs
+    // to another writer, which must keep it and publish its own slot
+    if (writeRecord == NULL)
+    {
+        debug_message(RED "failed (not writing)\n" NORMAL);
+        return 0;
+    }
     // A rejected copy left the claimed slot holding an older frame; publishing
     // it would send readers back in time, so the previous frame stays latest.
-    int aborted = (writeRecord != NULL) && writeRecord->aborted;
-    struct localStreamMapping *mapping = (writeRecord != NULL) ? writeRecord->mapping : NULL;
-    if (writeRecord != NULL) { writeRecord->inUse = 0; }
+    int aborted = writeRecord->aborted;
+    struct localStreamMapping *mapping = writeRecord->mapping;
+    writeRecord->inUse = 0;
 
-    if ((vf->bufferCount > 1) && (!aborted))
+    if ((mapping->bufferCount > 1) && (!aborted))
     {
         // Publish: make the just-written slot the one readers will latch onto.
         // The barrier ensures the memcpy done under copy_to_shared_memory is
@@ -1215,7 +1243,7 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
     }
 
     __sync_lock_release(&vf->locked);
-    if (mapping != NULL) { endMappingUse(mapping); }
+    endMappingUse(mapping);
     debug_message(GREEN "success\n" NORMAL);
     return 1;
 }

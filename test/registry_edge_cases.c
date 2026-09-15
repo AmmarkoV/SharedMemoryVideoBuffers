@@ -4,7 +4,8 @@
  *
  *   1. context_kept          - creating a context that already exists keeps its streams
  *   2. context_incompatible  - connecting to a context with a different layout fails,
- *                              and creating it again re-initializes it
+ *                              and creating it again replaces it with an empty one
+ *                              without resizing or clearing the old one under its users
  *   3. join_same_size        - another process registering an existing stream with the
  *                              same size joins it: nothing is reset and it can't destroy it
  *   4. resize_owner_alive    - registering a stream with a different size fails while
@@ -125,15 +126,21 @@ static void context_kept(const char *ctxName)
 static void context_incompatible(const char *ctxName)
 {
     if (!freshContext(ctxName)) { check(0, "context_incompatible: setup"); return; }
+    // A program of another build keeps this mapping of "its" context: a smaller
+    // layout than ours, so resizing the object to ours would cut it short
+    size_t oldSize = sizeof(struct SharedMemoryContext) / 2;
     int fd = shm_open(ctxName, O_RDWR, 0);
-    uint32_t *firstWord = mmap(NULL, sizeof(uint32_t), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    if ((fd == -1) || (ftruncate(fd, oldSize) == -1)) { check(0, "context_incompatible: setup"); return; }
+    unsigned char *oldContext = mmap(NULL, oldSize, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    firstWord[0] = 0xDEADBEEF; // not this build's layout
-    munmap(firstWord, sizeof(uint32_t));
+    memcpy(oldContext, "\xEF\xBE\xAD\xDE", 4); // not this build's layout
+    oldContext[oldSize-1] = 77;
     check(connectToSharedMemoryContextDescriptor(ctxName) == NULL, "context_incompatible: connecting to a different layout fails");
     struct SharedMemoryContext *ctx = NULL;
     if (createSharedMemoryContextDescriptor(ctxName) == 0) { ctx = connectToSharedMemoryContextDescriptor(ctxName); }
-    check(ctx != NULL && getSharedMemoryContextNumberOfBuffers(ctx) == 0, "context_incompatible: creating it again re-initializes it");
+    check(ctx != NULL && getSharedMemoryContextNumberOfBuffers(ctx) == 0, "context_incompatible: creating it again replaces it with an empty one");
+    // Touching the old mapping would SIGBUS (failing this case) had it been cut short
+    check((memcmp(oldContext, "\xEF\xBE\xAD\xDE", 4) == 0) && (oldContext[oldSize-1] == 77), "context_incompatible: the old context is left intact for programs still using it");
 }
 
 static void join_same_size(const char *ctxName)

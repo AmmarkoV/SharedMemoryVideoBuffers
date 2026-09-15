@@ -30,7 +30,7 @@ extern "C"
 // torn-read race: the old design only checked "is a writer active?" once before
 // reading, with nothing stopping a writer from starting mid-read). The count
 // actually used per stream is chosen at creation time (env var SHMVB_BUFFER_COUNT,
-// default 2), clamped to this ceiling; 1 disables multi-buffering entirely and
+// default MAX_LOCAL_BUFFERS), clamped to this ceiling; 1 disables multi-buffering entirely and
 // reproduces the original single-buffer behavior byte-for-byte.
 #define MAX_LOCAL_BUFFERS 4
 
@@ -164,8 +164,9 @@ void printSharedMemoryContextState(struct SharedMemoryContext *context);
 
 /**
  * @brief Creates a shared memory context descriptor if needed. A context that already
- * exists with this build's layout is left untouched, streams included; a missing one,
- * or one laid out by an incompatible build, is (re)initialized empty.
+ * exists with this build's layout is left untouched, streams included; a missing one is
+ * created empty. One laid out by an incompatible build is replaced by a new, empty one:
+ * programs still using the old one keep it (unaffected, but no longer shared with anyone new).
  * @param path Path to the shared memory.
  * @return 0 on success, -1 on failure.
  */
@@ -338,7 +339,8 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf);
  * the new "latest" complete frame for readers. If the last copy_to_shared_memory()
  * of this write was rejected, nothing is published and the previous frame stays latest.
  * @param vf Pointer to the video frame structure.
- * @return 1 on success, 0 on failure.
+ * @return 1 on success, 0 if this thread has no write in progress on vf (nothing is
+ * published and the writer lock is left alone).
  */
 int stopWritingToVideoBufferPointer(struct VideoFrame *vf);
 

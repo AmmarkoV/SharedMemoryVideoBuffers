@@ -15,6 +15,10 @@
  *                         by one stop must not leave a reader registered.
  *   5. read_table_full  - a start that can't be tracked on this thread must not
  *                         leave a reader registered.
+ *   6. stop_without_start - a stop with no matching start on this thread must
+ *                         neither publish nor release another writer's lock.
+ *   7. unlocked_copy    - a copy_to_shared_memory() outside start/stop writing
+ *                         stamps the slot it wrote, so pixels and timestamp match.
  *
  *  Exit code: 0 = all checks passed, 2 = a check failed, 1 = setup error.
  *
@@ -53,6 +57,15 @@ static int countSuccessfulWrites(struct VideoFrame *frame, int attempts)
     int ok = 0;
     for (int i=0; i<attempts; i++) { ok += writeGeneration(frame, (unsigned char) (100+i)); }
     return ok;
+}
+
+// Reads still registered on the frame. A leaked registration only blocks the
+// writer once it pins every free slot, so count them instead of relying on that.
+static int registeredReaders(const struct VideoFrame *frame)
+{
+    int registered = 0;
+    for (int i=0; i<MAX_READERS_PER_STREAM; i++) { registered += (frame->readers[i] != 0); }
+    return registered;
 }
 
 // Reads the latest frame's first pixel byte and timestamp, as seen by a reader.
@@ -94,16 +107,22 @@ int main(int argc, char *argv[])
     // 1. reader_crash
     if (!(frame = freshStream(ctx, stream_name))) { return 1; }
 
-    pid_t child = fork();
-    if (child == 0)
+    // Dead readers pin every slot but one, so the writer runs out of free slots
+    // unless it reclaims theirs
+    for (unsigned int k=0; k+1<frame->bufferCount; k++)
     {
-        struct SharedMemoryContext *childCtx = connectToSharedMemoryContextDescriptor(shm_name);
-        struct VideoFrame *childFrame = getVideoBufferPointer(childCtx, stream_name);
-        startReadingFromVideoBufferPointer(childFrame);
-        _exit(0); // dies without stopReadingFromVideoBufferPointer()
+        pid_t child = fork();
+        if (child == 0)
+        {
+            struct SharedMemoryContext *childCtx = connectToSharedMemoryContextDescriptor(shm_name);
+            struct VideoFrame *childFrame = getVideoBufferPointer(childCtx, stream_name);
+            startReadingFromVideoBufferPointer(childFrame);
+            _exit(0); // dies without stopReadingFromVideoBufferPointer()
+        }
+        waitpid(child, NULL, 0);
+        if (k+2<frame->bufferCount) { writeGeneration(frame, (unsigned char) (50+k)); } // the next child pins a newer slot
     }
-    waitpid(child, NULL, 0);
-    check(countSuccessfulWrites(frame, 5) == 5, "reader_crash: writer keeps publishing after a reader died mid-read");
+    check(countSuccessfulWrites(frame, 5) == 5, "reader_crash: writer keeps publishing after readers died mid-read");
 
     // 2. inplace_writer
     if (!(frame = freshStream(ctx, stream_name))) { return 1; }
@@ -135,7 +154,7 @@ int main(int argc, char *argv[])
     startReadingFromVideoBufferPointer(frame);
     startReadingFromVideoBufferPointer(frame);
     stopReadingFromVideoBufferPointer(frame);
-    check(countSuccessfulWrites(frame, 5) == 5, "nested_read: no reader left registered");
+    check(countSuccessfulWrites(frame, 5) == 5 && registeredReaders(frame) == 0, "nested_read: no reader left registered");
 
     // 5. read_table_full - more streams than one thread can track reads of at
     // once (two contexts' worth, since one context holds MAX_NUMBER_OF_BUFFERS)
@@ -163,6 +182,7 @@ int main(int argc, char *argv[])
     int allWritable = 1;
     for (int i=0; i<tableFrameCount; i++)
     {
+        if (registeredReaders(tableFrames[i]) != 0) { allWritable = 0; }
         for (int w=0; w<2; w++)
         {
             if (!startWritingToVideoBufferPointer(tableFrames[i])) { allWritable = 0; break; }
@@ -175,6 +195,26 @@ int main(int argc, char *argv[])
         for (int s=0; s<MAX_NUMBER_OF_BUFFERS; s++) { char name[32]; snprintf(name, sizeof(name), "table%d", s); destroyVideoFrame(tableCtx[c], name); }
         shm_unlink(tableShm[c]);
     }
+
+    // 6. stop_without_start
+    if (!(frame = freshStream(ctx, stream_name))) { return 1; }
+    unsigned int latestBefore = frame->latestIndex;
+    frame->locked     = 1;                    // another writer is mid-write...
+    frame->writeIndex = (latestBefore + 1) % frame->bufferCount; // ...on another slot
+    check(stopWritingToVideoBufferPointer(frame) == 0, "stop_without_start: reports failure");
+    check(frame->locked == 1 && frame->latestIndex == latestBefore, "stop_without_start: doesn't publish or release another writer's lock");
+    frame->locked = 0;
+
+    // 7. unlocked_copy
+    if (!(frame = freshStream(ctx, stream_name))) { return 1; }
+    if (!startWritingToVideoBufferPointer(frame)) { return 1; }
+    copy_to_shared_memory(frame, oversized, sizeof(oversized), 8); // rejected: writeIndex is left on an unpublished slot
+    stopWritingToVideoBufferPointer(frame);
+    if (frame->writeIndex == frame->latestIndex) { check(0, "unlocked_copy: setup"); }
+    unsigned char unlockedFrame[64*48*3];
+    memset(unlockedFrame, 9, sizeof(unlockedFrame));
+    check(copy_to_shared_memory(frame, unlockedFrame, sizeof(unlockedFrame), 9) == 1, "unlocked_copy: copy succeeds");
+    check(readLatest(frame, &pixel, &timestamp) && pixel == 9 && timestamp == 9, "unlocked_copy: pixels and timestamp belong to the same frame");
 
     destroyVideoFrame(ctx, stream_name);
     shm_unlink(shm_name);

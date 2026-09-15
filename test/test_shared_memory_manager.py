@@ -3,8 +3,9 @@
 
    read_copy        - read_from_shared_memory() returns a frame later writes can't change
    read_frame       - `with smm.read_frame() as view:` keeps the view's slot from being
-                      reused until the block exits, the view is read-only, reading the
-                      same manager again inside the block raises, and an exception in
+                      reused until the block exits (a writer left without a free slot
+                      drops the frame and returns False), the view is read-only, reading
+                      the same manager again inside the block raises, and an exception in
                       the block still releases the slot
    set_timestamp    - set_timestamp() re-stamps the latest frame and never releases a
                       writer lock held by someone else
@@ -14,11 +15,15 @@
                       logical order and rejects arrays of the wrong dtype or size
    restarted_stream - a reader follows a stream that its publisher re-created at a
                       new size, even when it lands in a different slot
+   own_context      - a publisher creates its descriptor itself when none exists yet
+   replaced_manager - a publisher replaced by another manager of the same stream in the
+                      same process doesn't destroy the stream when it goes away
 
 Exit code: 0 = all checks passed, 2 = a check failed, 1 = setup error.
 
 Usage: test_shared_memory_manager.py <libSharedMemoryVideoBuffers.so> [shm_name] [stream_name]
 """
+import contextlib
 import ctypes
 import gc
 import os
@@ -63,7 +68,7 @@ def main():
     shmName     = sys.argv[2] if len(sys.argv) > 2 else "shmvb_test_py.shm"
     streamName  = sys.argv[3] if len(sys.argv) > 3 else "py"
 
-    os.environ.pop("SHMVB_BUFFER_COUNT", None)  # read_frame cases assume the default of 2 slots
+    os.environ.pop("SHMVB_BUFFER_COUNT", None)  # read_frame cases assume the default of 4 slots
     lib = ctypes.CDLL(libraryPath)
     lib.createSharedMemoryContextDescriptor.argtypes = [ctypes.c_char_p]
     if lib.createSharedMemoryContextDescriptor(shmName.encode("utf-8")) != 0:
@@ -72,6 +77,9 @@ def main():
     writer = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=streamName,
                                  width=WIDTH, height=HEIGHT, channels=CHANNELS)
     reader = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=streamName, connect=True)
+    # More readers of the same stream, to hold several slots at once
+    reader2 = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=streamName, connect=True)
+    reader3 = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=streamName, connect=True)
 
     # read_copy
     writer.copy_numpy_to_shared_memory(solidFrame(1))
@@ -82,27 +90,37 @@ def main():
 
     # read_frame
     writer.copy_numpy_to_shared_memory(solidFrame(20))
-    with reader.read_frame() as view:
-        writer.copy_numpy_to_shared_memory(solidFrame(21))  # fills the other slot
-        # With 2 slots the next write would have to reuse the view's slot, so it must fail instead
-        secondWriteRefused = raised(RuntimeError, lambda: writer.copy_numpy_to_shared_memory(solidFrame(22)))
-        unchanged = view is not None and np.all(view == 20)
+    with reader.read_frame() as view, contextlib.ExitStack() as heldViews:
+        written = [writer.copy_numpy_to_shared_memory(solidFrame(21))]
+        view2 = heldViews.enter_context(reader2.read_frame())
+        written.append(writer.copy_numpy_to_shared_memory(solidFrame(22)))
+        view3 = heldViews.enter_context(reader3.read_frame())
+        written.append(writer.copy_numpy_to_shared_memory(solidFrame(23)))  # the last free slot
+        # Every other slot is either the latest frame or held by a view: dropped, not raised
+        written.append(writer.copy_numpy_to_shared_memory(solidFrame(24)))
+        unchanged = all(v is not None and np.all(v == value) for v, value in ((view, 20), (view2, 21), (view3, 22)))
         readOnly = view is not None and raised(ValueError, lambda: view.__setitem__((0, 0, 0), 0))
         nestedReadsRefused = raised(RuntimeError, reader.read_from_shared_memory) and raised(RuntimeError, reader.get_timestamp)
-    check(unchanged and secondWriteRefused, "read_frame: the view's slot isn't reused while the block is open")
+    check(unchanged and written == [True, True, True, False], "read_frame: the view's slot isn't reused while the block is open")
     check(readOnly, "read_frame: the view is read-only")
     check(nestedReadsRefused, "read_frame: reading the same manager inside the block raises")
-    writer.copy_numpy_to_shared_memory(solidFrame(23))
+    writer.copy_numpy_to_shared_memory(solidFrame(25))
     latest = reader.read_from_shared_memory()
-    check(latest is not None and np.all(latest == 23), "read_frame: the slot is released when the block exits")
+    check(latest is not None and np.all(latest == 25), "read_frame: the slot is released when the block exits")
     try:
         with reader.read_frame() as view:
             raise KeyError("raised inside the block")
     except KeyError:
         pass
-    releasedAfterException = not raised(RuntimeError, lambda: [writer.copy_numpy_to_shared_memory(solidFrame(v)) for v in (24, 25, 26)])
+    # The other readers hold two more slots, so the writer can only keep going if
+    # the slot the failed block held was released
+    written = [writer.copy_numpy_to_shared_memory(solidFrame(26))]
+    with reader2.read_frame():
+        written.append(writer.copy_numpy_to_shared_memory(solidFrame(27)))
+        with reader3.read_frame():
+            written += [writer.copy_numpy_to_shared_memory(solidFrame(v)) for v in (28, 29, 30)]
     latest = reader.read_from_shared_memory()
-    check(releasedAfterException and latest is not None and np.all(latest == 26),
+    check(all(written) and latest is not None and np.all(latest == 30),
           "read_frame: an exception inside the block still releases the slot")
 
     # set_timestamp
@@ -153,7 +171,42 @@ def main():
     check(restarted is not None and restarted.shape == (HEIGHT, WIDTH * 2, CHANNELS) and np.all(restarted == 40),
           "restarted_stream: a reader follows the re-created stream to its new slot and size")
 
-    del reader
+    # own_context - no descriptor exists yet, and no server process creates one
+    ownName = shmName + ".own"
+    if os.path.exists("/dev/shm/" + ownName):
+        os.remove("/dev/shm/" + ownName)
+    try:
+        ownWriter = SharedMemoryManager(libraryPath, descriptor=ownName, frameName=streamName,
+                                        width=WIDTH, height=HEIGHT, channels=CHANNELS)
+        ownReader = SharedMemoryManager(libraryPath, descriptor=ownName, frameName=streamName, connect=True)
+        ownWritten = ownWriter.copy_numpy_to_shared_memory(solidFrame(50))
+        ownFrame = ownReader.read_from_shared_memory()
+        check(ownWritten and ownFrame is not None and np.all(ownFrame == 50),
+              "own_context: a publisher creates its descriptor when none exists")
+        del ownReader, ownWriter
+    except RuntimeError as e:
+        check(False, "own_context: a publisher creates its descriptor when none exists (%s)" % e)
+
+    # replaced_manager - the new manager is created before the old one is released,
+    # as in `self.smm = SharedMemoryManager(...)` run twice
+    replacedName = streamName + "_replaced"
+    publisher = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=replacedName,
+                                    width=WIDTH, height=HEIGHT, channels=CHANNELS)
+    publisher = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=replacedName,
+                                    width=WIDTH, height=HEIGHT, channels=CHANNELS)
+    gc.collect()
+    replacedReader = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=replacedName, connect=True)
+    replacedWritten = publisher.copy_numpy_to_shared_memory(solidFrame(60))
+    replacedFrame = replacedReader.read_from_shared_memory()
+    check(replacedWritten and replacedFrame is not None and np.all(replacedFrame == 60),
+          "replaced_manager: the replaced manager doesn't destroy the stream")
+    del replacedReader
+    del publisher
+    gc.collect()
+    check(raised(RuntimeError, lambda: SharedMemoryManager(libraryPath, descriptor=shmName, frameName=replacedName, connect=True), replacedName),
+          "replaced_manager: the last manager still destroys the stream")
+
+    del reader, reader2, reader3
     del writer
     del blocker
     if os.path.exists("/dev/shm/" + shmName):
