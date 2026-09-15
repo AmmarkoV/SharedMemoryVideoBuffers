@@ -1,3 +1,12 @@
+/**
+ *  @file mmapBridge.c
+ *  @brief Implementation of the memory-mapped file bridge declared in mmapBridge.h.
+ *
+ *  The writer creates a file of the message size and maps it read-write; the reader maps
+ *  the same file read-only. A message is copied in with writeBridge() and out with readBridge(),
+ *  with no locking between the two.
+ *  @author Ammar Qammaz (AmmarkoV)
+ */
 #include "mmapBridge.h"
 
 #include <stdio.h>
@@ -17,6 +26,7 @@ char * strstrDoubleNewline(char * request,unsigned int requestLength,unsigned in
   if (requestLength==0)       { return request; }
   if (endOfLine==0)           { return request; }
 
+  // ptrA and ptrB walk the buffer as a pair of adjacent bytes
   char * ptrA=request;
   char * ptrB=request+1;
 
@@ -108,7 +118,7 @@ int initializeWritingBridge(struct bridgeContext * nbc ,const char * fileDescrip
     }
 
 
- nbc->mode=2;
+ nbc->mode=2; // writing
  //fprintf(stderr,"initializeWritingBridge success \n");
 
  return 1;
@@ -119,9 +129,15 @@ int writeBridge(struct bridgeContext * nbc ,void * data , unsigned int dataSize 
   if (nbc==0)       { return 0; }
   if (data==0)      { return 0; }
   if (dataSize==0)  { return 0; }
-  if (nbc->mode==0)
+  // Only a writing bridge is mapped writable: writing to a reading bridge would crash (SIGSEGV)
+  if (nbc->mode!=2)
   {
-    fprintf(stderr,"Cannot write to bridge , not properly initialized ..\n");
+    fprintf(stderr,"Cannot write to bridge , not initialized for writing ..\n");
+    return 0;
+  }
+  if (dataSize>nbc->dataSize)
+  {
+    fprintf(stderr,"Cannot write %u bytes to a bridge of %zu bytes ..\n",dataSize,nbc->dataSize);
     return 0;
   }
 
@@ -129,6 +145,7 @@ int writeBridge(struct bridgeContext * nbc ,void * data , unsigned int dataSize 
   void * mmapPtr = nbc->map;
   if (mmapPtr!=0)
   {
+     // Readers see the message as soon as it is copied into the shared mapping
      memcpy(mmapPtr , data , dataSize);
 
      // Write it to disk if needed
@@ -148,9 +165,10 @@ int writeBridge(struct bridgeContext * nbc ,void * data , unsigned int dataSize 
 int clearWritingBridge(struct bridgeContext * nbc)
 {
 if (nbc==0)  { return 0; }
-if (nbc->mode==0)
+// Only a writing bridge is mapped writable
+if (nbc->mode!=2)
   {
-    fprintf(stderr,"Cannot write to bridge , not properly initialized ..\n");
+    fprintf(stderr,"Cannot write to bridge , not initialized for writing ..\n");
     return 0;
   }
 
@@ -166,21 +184,21 @@ if (nbc->mode==0)
 int closeWritingBridge(struct bridgeContext * nbc)
 {
     if (nbc==0) { return 0; }
+    // Not initialized or already closed: map and fd aren't ours (fd 0 would close stdin)
+    if (nbc->mode==0) { return 0; }
 
     nbc->mode=0;
 
     // Don't forget to free the mmapped memory
-    if (munmap(nbc->map, nbc->dataSize) == -1)
-    {
-        close(nbc->fd);
-        perror("Error un-mmapping the file");
-        return 0;
-    }
+    int unmapped = (munmap(nbc->map, nbc->dataSize) == 0);
+    if (!unmapped) { perror("Error un-mmapping the file"); }
 
     // Un-mmaping doesn't close the file, so we still need to do that.
     close(nbc->fd);
+    nbc->map = 0;
+    nbc->fd  = -1;
 
-   return 1;
+   return unmapped;
 }
 
 
@@ -208,13 +226,23 @@ int initializeReadingBridge(struct bridgeContext * nbc ,const char * fileDescrip
 
     if (nbc->fd == -1)
     {
-        perror("Error opening file for writing");
+        perror("Error opening file for reading");
+        return 0;
+    }
+
+    // Touching a mapping past the end of the file is SIGBUS: the file must hold a whole message
+    struct stat fileStat;
+    if ( (fstat(nbc->fd, &fileStat) == -1) || ((intmax_t) fileStat.st_size < (intmax_t) sizeOfBridgeMsg) )
+    {
+        fprintf(stderr,"Bridge file %s is smaller than a %u byte message\n",fileDescriptor,sizeOfBridgeMsg);
+        close(nbc->fd);
         return 0;
     }
 
     nbc->dataSize = sizeOfBridgeMsg;
     printf("mmaping size is %ji\n", (intmax_t) nbc->dataSize);
 
+    // Read-only: a reader can never modify the message
     nbc->map = mmap(0, nbc->dataSize , PROT_READ, MAP_SHARED, nbc->fd, 0);
     if (nbc->map == MAP_FAILED)
     {
@@ -224,21 +252,12 @@ int initializeReadingBridge(struct bridgeContext * nbc ,const char * fileDescrip
     }
 
 
-
-   void * tmpBuf= malloc(sizeOfBridgeMsg);
-
-   if (tmpBuf)
-   {
-      readBridge(nbc,tmpBuf,sizeOfBridgeMsg);
-      free(tmpBuf);
-   }
-
   // struct naoCommand incomingCommand={0};
   // readCmdBridge(nbc,&incomingCommand);
   // nbc->lastMsgTimestamp = incomingCommand.timestampInit;
   // printf("Initial random timestamp is %lu \n", nbc->lastMsgTimestamp);
 
- nbc->mode=1;
+ nbc->mode=1; // reading
  fprintf(stderr,"initializeReadingBridge success \n");
 
  return 1;
@@ -257,9 +276,15 @@ int readBridge(struct bridgeContext * nbc,void * data , unsigned int dataSize )
     fprintf(stderr,"Cannot read from bridge , not properly initialized ..\n");
     return 0;
   }
+  if (dataSize>nbc->dataSize)
+  {
+    fprintf(stderr,"Cannot read %u bytes from a bridge of %zu bytes ..\n",dataSize,nbc->dataSize);
+    return 0;
+  }
 
   if (nbc->map!=0)
   {
+    // No lock: a concurrent writeBridge() can leave a partially updated message
     memcpy(data,nbc->map,dataSize);
     return 1;
   }
@@ -275,17 +300,18 @@ int readBridge(struct bridgeContext * nbc,void * data , unsigned int dataSize )
 int closeReadingBridge(struct bridgeContext * nbc)
 {
  if (nbc==0)             { return 0; }
+ // Not initialized or already closed: map and fd aren't ours (fd 0 would close stdin)
+ if (nbc->mode==0)       { return 0; }
+
+ nbc->mode=0;
 
  // Don't forget to free the mmapped memory
- if (munmap(nbc->map, nbc->dataSize) == -1)
-    {
-        close(nbc->fd);
-        perror("Error un-mmapping the file");
-        return 0;
-    }
+ int unmapped = (munmap(nbc->map, nbc->dataSize) == 0);
+ if (!unmapped) { perror("Error un-mmapping the file"); }
     // Un-mmaping doesn't close the file, so we still need to do that.
     close(nbc->fd);
-    return 1;
+    nbc->map = 0;
+    nbc->fd  = -1;
+    return unmapped;
 }
-
 

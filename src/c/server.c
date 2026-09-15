@@ -1,4 +1,16 @@
-//gcc -o server server.c shared_video.c -lrt -pthread
+/** @file server.c
+ *  @brief  Debugging tool that snapshots every stream of the "video_frames.shm" context to
+ *  data/server_streamN.pnm, N being the stream's slot.
+ *
+ *  Creates the context if needed. Takes a snapshot each time Enter is pressed, until
+ *  SIGINT, SIGTERM or the end of standard input. Not meant for production: streams don't
+ *  need a running server.
+ *
+ *  Repository : https://github.com/AmmarkoV/SharedMemoryVideoBuffers
+ *  @author Ammar Qammaz (AmmarkoV)
+ */
+
+//gcc -o server src/c/server.c src/c/sharedMemoryVideoBuffers.c -pthread -lrt
 #include "sharedMemoryVideoBuffers.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,34 +19,41 @@
 #include <signal.h>
 #include <sys/mman.h>
 
+/** @brief Cleared by handle_signal() to leave the main loop. */
 static volatile int running = 1;
+/** @brief The connected context (not used outside main()). */
 static struct SharedMemoryContext  *g_context  = NULL;
+/** @brief The local mapping of every stream (not used outside main()). */
 static struct VideoFrameLocalMapping *g_localMap = NULL;
 
+/**
+ * @brief SIGINT/SIGTERM handler: asks the main loop to stop. Installed without SA_RESTART,
+ * so it also interrupts the wait for Enter.
+ * @param sig Signal number (unused).
+ */
 static void handle_signal(int sig)
 {
     (void)sig;
     running = 0;
 }
 
-int main (int argc, char **argv)
+/**
+ * @brief Snapshots every stream to data/ each time Enter is pressed, until interrupted.
+ * @return EXIT_SUCCESS once interrupted or standard input ends, EXIT_FAILURE if the context can't be created or connected.
+ */
+int main()
 {
-    signal(SIGINT,  handle_signal);
-    signal(SIGTERM, handle_signal);
+    // No SA_RESTART: a signal makes the blocking getchar() below return instead of waiting for Enter
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = handle_signal;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGINT,  &action, NULL);
+    sigaction(SIGTERM, &action, NULL);
 
     struct VideoFrameLocalMapping * localMap = allocateLocalMapping();
     const char *shm_name = "video_frames.shm";
     char filename[256]={0};
-
-    int receive_characters = 1;
-    for (int i=0; i<argc; i++)
-    {
-        if (strcmp(argv[i], "--nokb") == 0)
-        {
-         receive_characters = 0;
-        }
-    }
-
 
     //Server creates the context if needed (an existing compatible one keeps its streams)
     if (createSharedMemoryContextDescriptor(shm_name) == -1)
@@ -59,12 +78,12 @@ int main (int argc, char **argv)
 
     while (running)
     {
-        if (receive_characters)
+        // Wait for Enter. EOF: interrupted by a signal, or standard input is closed
+        // (e.g. started in the background), where waiting would never block again
+        if (getchar() == EOF)
         {
-          getchar();  // Wait for Enter key
-        } else
-        {
-           usleep(100000); // 100ms
+          if (running) { fprintf(stderr,"Standard input closed, stopping\n"); }
+          break;
         }
 
         if (context->numberOfBuffers==0)
@@ -100,17 +119,19 @@ int main (int argc, char **argv)
                 }
                 else
                 {
+                    // e.g. nothing was published to the stream yet
                     fprintf(stderr, "Failed to lock buffer %u for reading\n", i);
                 }
             } //client has an allocated data pointer
             else
             {
+              // Free slot: drop our mapping of the stream that was there
               unmapLocalMappingItem(localMap,i);
             }
         } //we scan each of the available buffers
     } //server main loop
 
-    // Cleanup on SIGINT/SIGTERM
+    // Cleanup on SIGINT/SIGTERM or end of input
     for (unsigned int i = 0; i < MAX_NUMBER_OF_BUFFERS; i++)
     {
         unmapLocalMappingItem(localMap, i);

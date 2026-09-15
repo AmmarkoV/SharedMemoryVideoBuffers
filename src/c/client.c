@@ -1,12 +1,15 @@
-/** @file example.c
- *  @brief  An example to organize a large number of concurrently working threads without
- *  too many lines of code or difficulty understanding what is happening
- *  https://github.com/AmmarkoV/SharedMemoryVideoBuffers
+/** @file client.c
+ *  @brief  Example client that both writes and reads a stream: it publishes a 640x480 RGB
+ *  frame of random pixels, then reads it back, every few milliseconds, forever.
+ *
+ *  Creates the "video_frames.shm" context and the "stream1" stream if needed.
+ *
+ *  Repository : https://github.com/AmmarkoV/SharedMemoryVideoBuffers
  *  @author Ammar Qammaz (AmmarkoV)
  */
 
 //Can also be compiled using :
-//gcc  -O3 example.c -pthread -lm -o example
+//gcc  -O3 src/c/client.c src/c/sharedMemoryVideoBuffers.c -pthread -lrt -lm -o client
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -19,11 +22,17 @@
 
 
 
+/**
+ * @brief Writes and reads back random frames on "stream1" until killed.
+ * @param argc Unused.
+ * @param argv Unused.
+ * @return EXIT_FAILURE if the context or the stream can't be set up (the loop never ends otherwise).
+ */
 int main(int argc, char *argv[])
 {
     const char *shm_name    = "video_frames.shm";
     const char *stream_name = "stream1";
-    // Client process
+    // Client process: create the context if nobody did yet (an existing one is kept)
     if (createSharedMemoryContextDescriptor(shm_name) == -1)
     {
         return EXIT_FAILURE;
@@ -35,6 +44,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    // Create the stream, or join it if it already exists with this size
     createVideoFrameMetaData(context,stream_name,640,480,3);
 
     struct VideoFrame *frame = getVideoBufferPointer(context,stream_name);
@@ -65,9 +75,11 @@ int main(int argc, char *argv[])
             data[i] = rand() % 255;
         }
 
+        // Timestamp 0: stamped with the current time
         copy_to_shared_memory((void *)frame, data, frame->frame_size, 0);
 
         //memcpy(frame->data, data, frame->frame_size);
+        // Publishes the frame to readers and releases the writer lock
         stopWritingToVideoBufferPointer(frame);
         free(data);
     }
@@ -80,6 +92,7 @@ int main(int argc, char *argv[])
         unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
         if (buffer!=0)
         {
+         // The pointer is only valid until stopReadingFromVideoBufferPointer(): copy what is needed first
          memcpy(buffer, getVideoFrameDataPointer(frame), frame->frame_size);
          stopReadingFromVideoBufferPointer(frame);
          free(buffer);

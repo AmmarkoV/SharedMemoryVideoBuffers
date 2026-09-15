@@ -1,5 +1,13 @@
 /** @file sharedMemoryVideoBuffers.c
  *  @brief  A shared memory wrapper to make processing video streams from multiple processes easier.
+ *
+ *  Implementation of sharedMemoryVideoBuffers.h. The public functions are documented in the header;
+ *  this file documents the internal (static) helpers and the data they keep:
+ *  - process-local mappings of stream pixels (localMappings),
+ *  - per-thread records of the reads and writes in progress (tlsReadTable, tlsWriteTable),
+ *  - reader registrations in shared memory (VideoFrame::readers),
+ *  - the stream registry and its cross-process lock (SharedMemoryContext::registryLockPid).
+ *
  *  Repository : https://github.com/AmmarkoV/SharedMemoryVideoBuffers
  *  @author Ammar Qammaz (AmmarkoV)
  */
@@ -18,11 +26,11 @@
 #include <time.h>
 #include <pthread.h>
 
-#define NORMAL   "\033[0m"
-#define BLACK   "\033[30m"      /* Black */
-#define RED     "\033[31m"      /* Red */
-#define GREEN   "\033[32m"      /* Green */
-#define YELLOW  "\033[33m"      /* Yellow */
+#define NORMAL   "\033[0m"      ///< ANSI escape: reset terminal color
+#define BLACK   "\033[30m"      ///< ANSI escape: black text
+#define RED     "\033[31m"      ///< ANSI escape: red text
+#define GREEN   "\033[32m"      ///< ANSI escape: green text
+#define YELLOW  "\033[33m"      ///< ANSI escape: yellow text
 
 #include <signal.h>
 #include <errno.h>
@@ -30,6 +38,10 @@
 
 #include <stdarg.h>
 
+/**
+ * @brief printf-style message to stderr, compiled in only when DEBUG_MESSAGES is 1.
+ * @param format printf format string, followed by its arguments.
+ */
 static void debug_message(const char *format, ...)
 {
     #if DEBUG_MESSAGES
@@ -42,12 +54,18 @@ static void debug_message(const char *format, ...)
     #endif // DEBUG_MESSAGES
 }
 
-// How many physical slots (MAX_LOCAL_BUFFERS ceiling) each newly created stream
-// gets. Configurable via SHMVB_BUFFER_COUNT so existing deployments can opt out
-// (set to 1) without any code change; defaults to MAX_LOCAL_BUFFERS. With only
-// 2 slots, one reader holding an older frame leaves the writer nowhere to write,
-// so it stalls until the lock timeout and drops the frame; every extra slot lets
-// one more slow reader hold a frame without stalling the writer.
+/**
+ * @brief How many physical slots (MAX_LOCAL_BUFFERS ceiling) each newly created stream gets.
+ *
+ * Configurable via SHMVB_BUFFER_COUNT so existing deployments can opt out
+ * (set to 1) without any code change; defaults to MAX_LOCAL_BUFFERS. With only
+ * 2 slots, one reader holding an older frame leaves the writer nowhere to write,
+ * so it stalls until the lock timeout and drops the frame; every extra slot lets
+ * one more slow reader hold a frame without stalling the writer.
+ *
+ * The environment is read once per process; values outside 1..MAX_LOCAL_BUFFERS are ignored.
+ * @return The slot count for new streams.
+ */
 static unsigned int getConfiguredBufferCount()
 {
     static int cached = -1;
@@ -65,8 +83,15 @@ static unsigned int getConfiguredBufferCount()
     return (unsigned int) cached;
 }
 
-// A PID that no longer exists. ESRCH: no such process. EPERM means it exists
-// but belongs to another user, so it counts as alive.
+/**
+ * @brief Checks whether a PID no longer exists.
+ *
+ * kill(pid,0) sends no signal, it only checks the process. ESRCH: no such process.
+ * EPERM means it exists but belongs to another user, so it counts as alive.
+ * Only meaningful for PIDs of the same PID namespace.
+ * @param pid Process to check; 0 or negative (nobody) is never dead.
+ * @return 1 if pid is a positive PID of a process that has exited, 0 otherwise.
+ */
 static int processIsDead(pid_t pid)
 {
     return (pid > 0) && (kill(pid,0) == -1) && (errno == ESRCH);
@@ -81,25 +106,36 @@ static int processIsDead(pid_t pid)
 // maps the new backing object, and the old mapping is retired and unmapped as
 // soon as no read or write in this process still uses it.
 // ---------------------------------------------------------------------------
+
+/** @brief Maximum number of stream mappings (current and retired) one process can hold at once. */
 #define MAX_LOCAL_STREAM_MAPPINGS 64
 
+/** @brief This process's mapping of one generation of a stream's backing object. */
 struct localStreamMapping
 {
-    const struct VideoFrame *vf;  //<- shared slot this maps, at its address in this process
-    uint64_t generation;          //<- incarnation of the stream `base` maps
-    unsigned char *base;          //<- bufferCount * frameSize bytes
-    size_t size;
-    size_t frameSize;
-    unsigned int bufferCount;
-    int activeUses;               //<- reads/writes in progress in this process that use `base`
-    int retired;                  //<- superseded or released: unmap once activeUses reaches 0
-    int inUse;
+    const struct VideoFrame *vf;  ///< Shared slot this maps, at its address in this process
+    uint64_t generation;          ///< Incarnation of the stream `base` maps
+    unsigned char *base;          ///< bufferCount * frameSize bytes
+    size_t size;                  ///< Length of the mapping in bytes (bufferCount * frameSize)
+    size_t frameSize;             ///< Bytes per slot, copied from VideoFrame::frame_size when mapped
+    unsigned int bufferCount;     ///< Number of slots, copied from VideoFrame::bufferCount when mapped
+    int activeUses;               ///< Reads/writes in progress in this process that use `base`
+    int retired;                  ///< Superseded or released: unmap once activeUses reaches 0
+    int inUse;                    ///< 1 if this table entry holds a mapping, 0 if it is free
 };
 
+/** @brief Every stream mapping of this process, guarded by localMappingsLock. */
 static struct localStreamMapping localMappings[MAX_LOCAL_STREAM_MAPPINGS];
+/** @brief Guards localMappings against concurrent threads of this process. */
 static pthread_mutex_t localMappingsLock = PTHREAD_MUTEX_INITIALIZER;
 
-// Caller holds localMappingsLock.
+/**
+ * @brief Marks a mapping as retired, and unmaps it (freeing its table entry) if nothing uses it.
+ *
+ * Otherwise endMappingUse() unmaps it once the last read or write using it stops.
+ * Caller holds localMappingsLock.
+ * @param mapping Entry of localMappings to retire.
+ */
 static void retireMappingLocked(struct localStreamMapping *mapping)
 {
     mapping->retired = 1;
@@ -110,11 +146,18 @@ static void retireMappingLocked(struct localStreamMapping *mapping)
     }
 }
 
-// Caller holds localMappingsLock. Returns this process's mapping of the stream
-// currently in vf's slot, mapping it first if needed, or NULL if the slot holds
-// no complete stream.
+/**
+ * @brief Returns this process's mapping of the stream currently in vf's slot, mapping it first if needed.
+ *
+ * A mapping of an older generation of the stream is retired on the way.
+ * Caller holds localMappingsLock.
+ * @param vf Shared stream slot.
+ * @return The current mapping, or NULL if the slot holds no complete stream, its backing object
+ * is gone or too small, or this process already holds MAX_LOCAL_STREAM_MAPPINGS mappings.
+ */
 static struct localStreamMapping * currentMappingLocked(const struct VideoFrame *vf)
 {
+    // Look for the (single) non-retired mapping of this slot
     struct localStreamMapping *current = NULL;
     for (int i=0; i<MAX_LOCAL_STREAM_MAPPINGS; i++)
     {
@@ -142,6 +185,7 @@ static struct localStreamMapping * currentMappingLocked(const struct VideoFrame 
         if (vf->generation == generation) { break; }
         if (attempts >= ATTEMPTS_TO_LOCK_A_BUFFER) { return NULL; }
     }
+    // Shared memory can hold anything: never trust a layout that would overflow or map nothing
     if ((bufferCount == 0) || (bufferCount > MAX_LOCAL_BUFFERS) || (frameSize == 0) || (frameSize > SIZE_MAX / bufferCount)) { return NULL; }
     size_t size = frameSize * bufferCount;
 
@@ -164,7 +208,7 @@ static struct localStreamMapping * currentMappingLocked(const struct VideoFrame 
     if ((fstat(shm_fd, &objectStat) == -1) || ((size_t) objectStat.st_size < size)) { close(shm_fd); return NULL; }
 
     unsigned char *base = (unsigned char*) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    close(shm_fd);
+    close(shm_fd); // the mapping keeps the object alive, the descriptor isn't needed anymore
     if (base == MAP_FAILED)
     {
         fprintf(stderr,RED "mmap frame %s\n" NORMAL,backingName);
@@ -183,7 +227,11 @@ static struct localStreamMapping * currentMappingLocked(const struct VideoFrame 
     return freeEntry;
 }
 
-// Mapping for a read or write: stays mapped until the matching endMappingUse().
+/**
+ * @brief Gets the current mapping of vf for a read or write, keeping it mapped until the matching endMappingUse().
+ * @param vf Shared stream slot.
+ * @return The mapping, or NULL as currentMappingLocked().
+ */
 static struct localStreamMapping * beginMappingUse(const struct VideoFrame *vf)
 {
     pthread_mutex_lock(&localMappingsLock);
@@ -193,6 +241,10 @@ static struct localStreamMapping * beginMappingUse(const struct VideoFrame *vf)
     return mapping;
 }
 
+/**
+ * @brief Ends a use started by beginMappingUse(), unmapping the mapping if it was retired meanwhile and this was its last use.
+ * @param mapping Mapping returned by beginMappingUse().
+ */
 static void endMappingUse(struct localStreamMapping *mapping)
 {
     pthread_mutex_lock(&localMappingsLock);
@@ -201,8 +253,16 @@ static void endMappingUse(struct localStreamMapping *mapping)
     pthread_mutex_unlock(&localMappingsLock);
 }
 
-// Mapping for callers outside a read or write. Unprotected: another thread may
-// retire it right after this returns.
+/**
+ * @brief Gets the current mapping of vf for callers outside a read or write.
+ *
+ * Unprotected: another thread may retire it right after this returns.
+ * @param vf Shared stream slot.
+ * @param[out] size Length of the mapping in bytes, if not NULL.
+ * @param[out] frameSize Bytes per slot, if not NULL.
+ * @param[out] bufferCount Number of slots, if not NULL.
+ * @return Start of the mapping, or NULL as currentMappingLocked() (outputs are then left untouched).
+ */
 static unsigned char * currentMappingBase(const struct VideoFrame *vf, size_t *size, size_t *frameSize, unsigned int *bufferCount)
 {
     unsigned char *base = NULL;
@@ -219,7 +279,10 @@ static unsigned char * currentMappingBase(const struct VideoFrame *vf, size_t *s
     return base;
 }
 
-// Unmaps this process's mapping of vf's slot as soon as nothing here uses it.
+/**
+ * @brief Unmaps this process's mapping of vf's slot as soon as nothing here uses it.
+ * @param vf Shared stream slot.
+ */
 static void releaseMapping(const struct VideoFrame *vf)
 {
     pthread_mutex_lock(&localMappingsLock);
@@ -240,21 +303,30 @@ static void releaseMapping(const struct VideoFrame *vf)
 // gives every start/stop pair its own private slot index for free, with zero
 // change to any caller's code.
 // ---------------------------------------------------------------------------
+
+/** @brief Maximum number of different frames one thread can be reading at the same time. */
 #define MAX_TLS_READ_ENTRIES 16
 
+/** @brief One read in progress on this thread, between start/stopReadingFromVideoBufferPointer(). */
 struct tlsReadEntry
 {
-    const struct VideoFrame *vf;
-    struct localStreamMapping *mapping; //<- this process's mapping the read uses, kept mapped until stop
-    unsigned int index;        //<- slot this thread latched onto
-    int registered;            //<- readerEntry/registration hold a registration (multi-buffered streams only)
-    unsigned int readerEntry;  //<- which vf->readers[] entry holds this read's registration
-    uint64_t registration;     //<- value stored in that entry, so stop only ever releases its own
-    int inUse;
+    const struct VideoFrame *vf;        ///< Frame being read
+    struct localStreamMapping *mapping; ///< This process's mapping the read uses, kept mapped until stop
+    unsigned int index;        ///< Slot this thread latched onto
+    int registered;            ///< readerEntry/registration hold a registration (multi-buffered streams only)
+    unsigned int readerEntry;  ///< Which vf->readers[] entry holds this read's registration
+    uint64_t registration;     ///< Value stored in that entry, so stop only ever releases its own
+    int inUse;                 ///< 1 if this table entry holds a read, 0 if it is free
 };
 
+/** @brief Reads in progress on this thread. */
 static __thread struct tlsReadEntry tlsReadTable[MAX_TLS_READ_ENTRIES];
 
+/**
+ * @brief Finds this thread's read in progress on vf.
+ * @param vf Frame being read.
+ * @return Its entry of tlsReadTable, or NULL if this thread isn't reading vf.
+ */
 static struct tlsReadEntry * tlsReadFind(const struct VideoFrame *vf)
 {
     for (int i=0; i<MAX_TLS_READ_ENTRIES; i++)
@@ -264,6 +336,10 @@ static struct tlsReadEntry * tlsReadFind(const struct VideoFrame *vf)
     return NULL;
 }
 
+/**
+ * @brief Finds a free entry of tlsReadTable. The entry stays free until its inUse is set.
+ * @return The entry, or NULL if this thread already reads MAX_TLS_READ_ENTRIES frames.
+ */
 static struct tlsReadEntry * tlsReadFindFree()
 {
     for (int i=0; i<MAX_TLS_READ_ENTRIES; i++)
@@ -277,19 +353,28 @@ static struct tlsReadEntry * tlsReadFindFree()
 // lock on, so getVideoFrameDataPointer() can hand a writer the slot it claimed
 // and stopWritingToVideoBufferPointer() can skip publishing a slot whose
 // copy_to_shared_memory() was rejected.
+
+/** @brief Maximum number of different frames one thread can be writing at the same time. */
 #define MAX_TLS_WRITE_ENTRIES 16
 
+/** @brief One write in progress on this thread, between start/stopWritingToVideoBufferPointer(). */
 struct tlsWriteEntry
 {
-    const struct VideoFrame *vf;
-    struct localStreamMapping *mapping; //<- this process's mapping the write uses, kept mapped until stop
-    int aborted; //<- last copy_to_shared_memory() of this write was rejected
-    int stamped; //<- this write set the slot's timestamp; otherwise stop stamps the current time
-    int inUse;
+    const struct VideoFrame *vf;        ///< Frame being written (this thread holds its writer lock)
+    struct localStreamMapping *mapping; ///< This process's mapping the write uses, kept mapped until stop
+    int aborted; ///< Last copy_to_shared_memory() of this write was rejected
+    int stamped; ///< This write set the slot's timestamp; otherwise stop stamps the current time
+    int inUse;   ///< 1 if this table entry holds a write, 0 if it is free
 };
 
+/** @brief Writes in progress on this thread. */
 static __thread struct tlsWriteEntry tlsWriteTable[MAX_TLS_WRITE_ENTRIES];
 
+/**
+ * @brief Finds this thread's write in progress on vf.
+ * @param vf Frame being written.
+ * @return Its entry of tlsWriteTable, or NULL if this thread isn't writing vf.
+ */
 static struct tlsWriteEntry * tlsWriteFind(const struct VideoFrame *vf)
 {
     for (int i=0; i<MAX_TLS_WRITE_ENTRIES; i++)
@@ -299,6 +384,10 @@ static struct tlsWriteEntry * tlsWriteFind(const struct VideoFrame *vf)
     return NULL;
 }
 
+/**
+ * @brief Finds a free entry of tlsWriteTable. The entry stays free until its inUse is set.
+ * @return The entry, or NULL if this thread already writes MAX_TLS_WRITE_ENTRIES frames.
+ */
 static struct tlsWriteEntry * tlsWriteFindFree()
 {
     for (int i=0; i<MAX_TLS_WRITE_ENTRIES; i++)
@@ -315,11 +404,24 @@ static struct tlsWriteEntry * tlsWriteFindFree()
 // process has PID 0). The PID lets the writer free entries left behind by
 // readers that exited without calling stopReadingFromVideoBufferPointer().
 // ---------------------------------------------------------------------------
+
+/**
+ * @brief Packs a reader registration for VideoFrame::readers.
+ * @param pid Reading process.
+ * @param slot Slot being read.
+ * @return (pid << 32) | slot, never 0 for a real process.
+ */
 static uint64_t packReaderRegistration(pid_t pid, unsigned int slot)
 {
     return ((uint64_t) (uint32_t) pid << 32) | slot;
 }
 
+/**
+ * @brief Checks whether any read, in any process, is registered on a slot.
+ * @param vf Stream.
+ * @param slot Slot to check.
+ * @return 1 if at least one registration names slot, 0 otherwise.
+ */
 static int slotHasReaders(const struct VideoFrame *vf, unsigned int slot)
 {
     for (unsigned int i=0; i<MAX_READERS_PER_STREAM; i++)
@@ -330,9 +432,13 @@ static int slotHasReaders(const struct VideoFrame *vf, unsigned int slot)
     return 0;
 }
 
-// Without this, one reader killed mid-read (crash, Ctrl-C, kill -9) pins its
-// slot forever and, with the default of 2 slots, the writer can never publish
-// again.
+/**
+ * @brief Frees the registrations of readers whose process has exited.
+ *
+ * Without this, one reader killed mid-read (crash, Ctrl-C, kill -9) pins its
+ * slot forever and, with only 2 slots, the writer can never publish again.
+ * @param vf Stream whose VideoFrame::readers to clean.
+ */
 static void reclaimDeadReaders(struct VideoFrame *vf)
 {
     for (unsigned int i=0; i<MAX_READERS_PER_STREAM; i++)
@@ -343,6 +449,7 @@ static void reclaimDeadReaders(struct VideoFrame *vf)
         pid_t pid = (pid_t) (registration >> 32);
         if (processIsDead(pid))
         {
+            // Compare-and-swap: only clear the entry if it still holds the dead reader's registration
             if (__sync_bool_compare_and_swap(&vf->readers[i], registration, 0))
             {
                 fprintf(stderr,"Reclaimed slot %u of stream %s from a dead reader (pid %d)\n",(unsigned int) (registration & 0xFFFFFFFF),vf->name,pid);
@@ -351,6 +458,14 @@ static void reclaimDeadReaders(struct VideoFrame *vf)
     }
 }
 
+/**
+ * @brief Stores a registration in a free entry of VideoFrame::readers.
+ *
+ * If the table is full, entries of dead readers are reclaimed and the claim is tried once more.
+ * @param vf Stream.
+ * @param registration Value from packReaderRegistration().
+ * @return Index of the claimed entry, or -1 if every entry is held by a live reader.
+ */
 static int claimReaderEntry(struct VideoFrame *vf, uint64_t registration)
 {
     for (int pass=0; pass<2; pass++)
@@ -365,6 +480,12 @@ static int claimReaderEntry(struct VideoFrame *vf, uint64_t registration)
     return -1;
 }
 
+/**
+ * @brief Integer power, used for the PNM maximum sample value.
+ * @param base Base.
+ * @param exp Exponent.
+ * @return base raised to exp (1 if exp is 0), wrapping on overflow.
+ */
 static unsigned int simplePowPPM(unsigned int base,unsigned int exp)
 {
     if (exp==0) return 1;
@@ -384,38 +505,38 @@ int writePNM(const char * filename,int width,int height,int channels, unsigned c
 
     if(data==0) { fprintf(stderr,"saveRawImageToFile(%s) called for an unallocated (empty) frame , will not write any file output\n",filename); return 0; }
 
-    FILE *fd=0;
-    fd = fopen(filename,"wb");
-
-    if (fd!=0)
+    // Validated before opening the file, so a rejected image leaves no file behind
+    // PNM magic number: P6 = binary RGB, P5 = binary grayscale
+    const char * magic = (channels==3) ? "P6" : (channels==1) ? "P5" : NULL;
+    if (magic==NULL)
     {
-        unsigned int n;
-        if (channels==3) fprintf(fd, "P6\n");
-        else if (channels==1) fprintf(fd, "P5\n");
-        else
-        {
-            fprintf(stderr,"Invalid channels arg (%u) for SaveRawImageToFile\n",channels);
-            fclose(fd);
-            return 1;
-        }
-
-        fprintf(fd, "%d %d\n%u\n", width, height , simplePowPPM(2,8)-1);
-
-        n =  width * height * channels;
-
-        //fprintf(stderr,"fwrite(pic->data, 1 , n , fd);\n");
-        fwrite(data, 1 , n , fd);
-        //fprintf(stderr,"survived\n");
-        fflush(fd);
-        fclose(fd);
-        return 1;
+        fprintf(stderr,"Invalid channels arg (%d) for SaveRawImageToFile\n",channels);
+        return 0;
     }
-    else
+    if ( (width<=0) || (height<=0) || ((size_t) width > SIZE_MAX / (size_t) height) || ((size_t) width * (size_t) height > SIZE_MAX / (size_t) channels) )
+    {
+        fprintf(stderr,"Invalid dimensions (%dx%d) for SaveRawImageToFile\n",width,height);
+        return 0;
+    }
+    size_t n = (size_t) width * (size_t) height * (size_t) channels;
+
+    FILE *fd = fopen(filename,"wb");
+    if (fd==0)
     {
         fprintf(stderr,"SaveRawImageToFile could not open output file %s\n",filename);
         return 0;
     }
-    return 0;
+
+    // Header: magic, dimensions and the maximum sample value (255 for 8-bit samples)
+    int ok = (fprintf(fd, "%s\n%d %d\n%u\n", magic, width, height, simplePowPPM(2,8)-1) > 0);
+    ok = ok && (fwrite(data, 1, n, fd) == n);
+    // fclose() flushes: a failed flush (e.g. disk full) is a failed write too
+    ok = (fclose(fd) == 0) && ok;
+    if (!ok)
+    {
+        fprintf(stderr,"SaveRawImageToFile could not write %s\n",filename);
+    }
+    return ok;
 }
 
 int writeVideoFrameToImage(const char * filename,struct VideoFrame * pic, unsigned char * data)
@@ -438,6 +559,7 @@ int freeLocalMapping(struct VideoFrameLocalMapping * lm)
 {
   if (lm!=0)
   {
+      // unmapLocalMappingItem() skips items that were never mapped
       for (unsigned int item=0; item<MAX_NUMBER_OF_BUFFERS; item++)
       {
           unmapLocalMappingItem(lm,item);
@@ -465,6 +587,7 @@ int mapRemoteToLocal(struct SharedMemoryContext *context, struct VideoFrameLocal
   if ( (context==0) || (localMap==0) || (item>=MAX_NUMBER_OF_BUFFERS) ) { return 0; }
 
   localMap->smc = context;
+  // The mapping itself is owned by the process-wide table; localMap only remembers where it is
   size_t size = 0;
   unsigned char *base = currentMappingBase(&context->buffer[item], &size, NULL, NULL);
   localMap->data[item] = base;
@@ -485,7 +608,12 @@ int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,unsigned int 
  return 1;
 }
 
-// Slot index of the stream named streamName, or -1.
+/**
+ * @brief Finds the slot holding the stream named streamName.
+ * @param context Shared memory context.
+ * @param streamName Stream name.
+ * @return Index into SharedMemoryContext::buffer, or -1 if no populated slot has that name.
+ */
 static int findStreamSlot(const struct SharedMemoryContext *context, const char *streamName)
 {
     for (unsigned int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
@@ -506,12 +634,16 @@ int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
 
 
 
-// Auto-timestamp for writers that pass 0: NANOSECONDS since the Unix epoch, the
-// unit the grabber publishes and the classifier reports. time(NULL) only advances
-// once a second, so every frame published inside the same second carried an
-// identical timestamp and any consumer using it as frame identity (e.g. a "skip
-// what I already processed" limiter) throttled to 1 Hz. Never 0: a slot whose
-// timestamp is 0 holds no published frame.
+/**
+ * @brief Auto-timestamp for writers that pass 0: NANOSECONDS since the Unix epoch.
+ *
+ * Nanoseconds are the unit the grabber publishes and the classifier reports. time(NULL) only advances
+ * once a second, so every frame published inside the same second carried an
+ * identical timestamp and any consumer using it as frame identity (e.g. a "skip
+ * what I already processed" limiter) throttled to 1 Hz. Never 0: a slot whose
+ * timestamp is 0 holds no published frame.
+ * @return CLOCK_REALTIME in nanoseconds (whole seconds plus 1 if the clock can't be read).
+ */
 static uint64_t getUnixTimestampNanoseconds()
 {
     struct timespec ts;
@@ -543,7 +675,7 @@ int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, u
             unsigned int bufferCount = 0;
             unsigned char *base = currentMappingBase(frame, NULL, &capacity, &bufferCount);
             slot = frame->latestIndex;
-            if (slot >= bufferCount) { slot = 0; }
+            if (slot >= bufferCount) { slot = 0; } // latestIndex is shared memory: never index past our mapping
             if (base != NULL) { target = base + ((size_t) slot * capacity); }
         }
         if (target!=0)
@@ -606,10 +738,16 @@ int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *c
   return 0;
 }
 
-// Runtime-gated so callers that poll this every frame don't pay for fprintf
-// unless the caller opted in. DEBUG_MESSAGES is a compile-time switch and
-// this function is called far too often (every frame, from several example
-// binaries and from the Python wrapper) to compile it in unconditionally.
+/**
+ * @brief Checks whether printSharedMemoryContextState() should print.
+ *
+ * Runtime-gated so callers that poll this every frame don't pay for fprintf
+ * unless the caller opted in. DEBUG_MESSAGES is a compile-time switch and
+ * this function is called far too often (every frame, from several example
+ * binaries and from the Python wrapper) to compile it in unconditionally.
+ * The environment is read once per process.
+ * @return 1 if SHMVB_VERBOSE is "1" or "true", 0 otherwise.
+ */
 static int verboseEnabled()
 {
     static int cached = -1;
@@ -633,13 +771,24 @@ void printSharedMemoryContextState(struct SharedMemoryContext *context)
      }
 }
 
+/**
+ * @brief Checks whether a mapped context was fully initialized with this build's layout.
+ * @param context Mapped context, at least sizeof(struct SharedMemoryContext) bytes.
+ * @return 1 if its magic and version match SHMVB_CONTEXT_MAGIC and SHMVB_CONTEXT_VERSION.
+ */
 static int contextHasThisLayout(const struct SharedMemoryContext *context)
 {
     return (context->magic == SHMVB_CONTEXT_MAGIC) && (context->version == SHMVB_CONTEXT_VERSION);
 }
 
-// Maps the context behind shm_fd once it has this build's size and layout,
-// waiting briefly in case its creator is still initializing it. NULL if it doesn't.
+/**
+ * @brief Maps the context behind shm_fd once it has this build's size and layout.
+ *
+ * Waits briefly (about 100 ms) in case its creator is still initializing it.
+ * The size is checked before mapping, so a smaller object from another build can't cause SIGBUS.
+ * @param shm_fd Open descriptor of the context's shm object; the caller keeps and closes it.
+ * @return The mapped context (sizeof(struct SharedMemoryContext) bytes), or NULL if it never becomes compatible.
+ */
 static struct SharedMemoryContext * mapCompatibleContext(int shm_fd)
 {
     size_t total_size = sizeof(struct SharedMemoryContext);
@@ -669,6 +818,8 @@ int createSharedMemoryContextDescriptor(const char *path)
 
     size_t total_size = sizeof(struct SharedMemoryContext);
     int shm_fd = -1;
+    // O_EXCL: only the process that actually creates the object initializes it below.
+    // A few attempts cover the object being removed or replaced between our calls.
     for (int attempts=0; (shm_fd == -1) && (attempts<3); attempts++)
     {
         shm_fd = shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0666);
@@ -734,14 +885,21 @@ int createSharedMemoryContextDescriptor(const char *path)
 // Stream registry: creating, joining, replacing and destroying streams.
 // ---------------------------------------------------------------------------
 
-// Serializes registry changes across processes. The holder's PID is stored so a
-// process that died holding the lock can't jam it.
+/**
+ * @brief Takes the cross-process registry lock (SharedMemoryContext::registryLockPid).
+ *
+ * Serializes registry changes across processes. The holder's PID is stored so a
+ * process that died holding the lock can't jam it.
+ * @param context Shared memory context.
+ * @return 1 once the lock is held, 0 after ATTEMPTS_TO_LOCK_A_BUFFER failed attempts.
+ */
 static int acquireRegistryLock(struct SharedMemoryContext *context)
 {
     pid_t pid = getpid();
     for (int attempts=0; attempts<ATTEMPTS_TO_LOCK_A_BUFFER; attempts++)
     {
         if (__sync_bool_compare_and_swap(&context->registryLockPid, 0, pid)) { return 1; }
+        // Held: take it over only if the holder died, and only if nobody else took it over first
         int32_t holder = context->registryLockPid;
         if (processIsDead(holder) && __sync_bool_compare_and_swap(&context->registryLockPid, holder, pid)) { return 1; }
         usleep(SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS);
@@ -750,12 +908,21 @@ static int acquireRegistryLock(struct SharedMemoryContext *context)
     return 0;
 }
 
+/**
+ * @brief Releases the registry lock, if this process holds it.
+ * @param context Shared memory context.
+ */
 static void releaseRegistryLock(struct SharedMemoryContext *context)
 {
     __sync_bool_compare_and_swap(&context->registryLockPid, getpid(), 0);
 }
 
-// Caller holds the registry lock.
+/**
+ * @brief Lowers SharedMemoryContext::numberOfBuffers past trailing free slots.
+ *
+ * Caller holds the registry lock.
+ * @param context Shared memory context.
+ */
 static void trimNumberOfBuffers(struct SharedMemoryContext *context)
 {
     while ((context->numberOfBuffers > 0) && (!context->buffer[context->numberOfBuffers-1].is_populated))
@@ -764,8 +931,14 @@ static void trimNumberOfBuffers(struct SharedMemoryContext *context)
     }
 }
 
-// Creates the shm object holding a stream's pixels. A leftover object with the
-// same name (e.g. from before the context was re-initialized) is replaced.
+/**
+ * @brief Creates the shm object holding a stream's pixels, zero-filled.
+ *
+ * A leftover object with the same name (e.g. from before the context was re-initialized) is replaced.
+ * @param backingName shm object name, "/<context>.<stream>.<generation>".
+ * @param size Size in bytes (bufferCount * frame_size).
+ * @return 1 on success, 0 on failure (nothing is left behind).
+ */
 static int createBackingObject(const char *backingName, size_t size)
 {
     int shm_fd = shm_open(backingName, O_CREAT | O_EXCL | O_RDWR, 0666);
@@ -790,11 +963,25 @@ static int createBackingObject(const char *backingName, size_t size)
     return 1;
 }
 
-// Creates streamName, joins it if it already exists with the same size, or
-// replaces it if its size differs and its owner is this process or has exited.
+/**
+ * @brief Creates streamName, joins it if it already exists with the same size, or
+ * replaces it if its size differs and its owner is this process or has exited.
+ *
+ * Joining a stream whose owner exited makes this process its owner and releases
+ * the writer lock the owner may have died holding.
+ * Backs createVideoFrameMetaData() and createGenericMetaData().
+ * @param context Shared memory context.
+ * @param streamName Stream name: not empty, shorter than MAX_SHM_NAME, no '/'.
+ * @param width Frame width stored in the VideoFrame.
+ * @param height Frame height stored in the VideoFrame.
+ * @param channels Channels stored in the VideoFrame.
+ * @param frameSize Bytes per slot.
+ * @return EXIT_SUCCESS or EXIT_FAILURE.
+ */
 static int registerStream(struct SharedMemoryContext* context,const char * streamName,unsigned int width, unsigned int height, unsigned int channels, size_t frameSize)
 {
     if ((context==0) || (streamName==0)) { return EXIT_FAILURE; }
+    // '/' would split the backing object's name
     if ((streamName[0]==0) || (strlen(streamName) >= MAX_SHM_NAME) || (strchr(streamName,'/') != NULL))
     {
         fprintf(stderr,"Invalid stream name\n");
@@ -833,8 +1020,10 @@ static int registerStream(struct SharedMemoryContext* context,const char * strea
             releaseRegistryLock(context);
             return EXIT_FAILURE;
         }
+        // Different size, and ours to replace: fall through and re-create it in the same slot
     } else
     {
+        // New stream: the first free slot
         for (unsigned int i=0; i<MAX_NUMBER_OF_BUFFERS; i++)
         {
             if (!context->buffer[i].is_populated) { slot = (int) i; break; }
@@ -888,7 +1077,7 @@ static int registerStream(struct SharedMemoryContext* context,const char * strea
     frame->latestIndex = 0;
     for (unsigned int i=0; i<MAX_LOCAL_BUFFERS; i++)
     {
-        frame->timestamps[i]  = 0;
+        frame->timestamps[i]  = 0; // nothing published yet: reads fail until the first write
     }
     for (unsigned int i=0; i<MAX_READERS_PER_STREAM; i++)
     {
@@ -905,6 +1094,7 @@ static int registerStream(struct SharedMemoryContext* context,const char * strea
         result = EXIT_SUCCESS;
     } else
     {
+        // Leave the slot free rather than half-initialized
         memset(frame, 0, sizeof(struct VideoFrame));
         trimNumberOfBuffers(context);
     }
@@ -962,7 +1152,7 @@ unsigned char * getVideoFrameDataPointer(struct VideoFrame * frame)
     unsigned char *base = currentMappingBase(frame, NULL, &frameSize, &bufferCount);
     if (base == NULL) { return 0; }
     unsigned int index = frame->latestIndex;
-    if (index >= bufferCount) { index = 0; }
+    if (index >= bufferCount) { index = 0; } // latestIndex is shared memory: never index past our mapping
     return base + ((size_t) index * frameSize);
   }
   return 0;
@@ -1008,6 +1198,7 @@ uint64_t getVideoFrameTimestamp(struct VideoFrame * frame)
 {
   if (frame)
   {
+    // The slot this thread is reading, otherwise the latest one
     struct tlsReadEntry *readRecord = tlsReadFind(frame);
     unsigned int index = (readRecord != NULL) ? readRecord->index : frame->latestIndex;
     if (index >= MAX_LOCAL_BUFFERS) { index = 0; }
@@ -1023,6 +1214,7 @@ void setVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timestamp)
     // Only meaningful while a write is in flight (between start/stopWriting),
     // matching how copy_to_shared_memory stamps the slot it just wrote.
     frame->timestamps[frame->writeIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampNanoseconds();
+    // Tell stopWritingToVideoBufferPointer() not to replace this timestamp with the current time
     struct tlsWriteEntry *writeRecord = tlsWriteFind(frame);
     if (writeRecord != NULL) { writeRecord->stamped = 1; }
   }
@@ -1049,6 +1241,7 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
         fprintf(stderr,"createVideoFrameMetaData: width*height*channels would overflow\n");
         return EXIT_FAILURE;
     }
+    // A zero-sized frame is rejected by registerStream()
     return registerStream(context, streamName, width, height, channels, wh * channels);
 }
 
@@ -1059,6 +1252,7 @@ int createVideoFrameMetaData(struct SharedMemoryContext* context,const char * st
 //------------------------------------------------------------
 int createGenericMetaData(struct SharedMemoryContext* context,const char * streamName,unsigned int dataSize)
 {
+    // Described as a dataSize x 1 image with 1 channel
     return registerStream(context, streamName, dataSize, 1, 1, dataSize);
 }
 
@@ -1117,7 +1311,7 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
     }
 
     struct SharedMemoryContext *context = mapCompatibleContext(shm_fd);
-    close(shm_fd);
+    close(shm_fd); // the mapping stays valid without the descriptor
     if (context == NULL)
     {
         fprintf(stderr,RED "Shared memory context %s isn't laid out for this build of the library (version %u); rebuild every program using it, or recreate it with createSharedMemoryContextDescriptor()" NORMAL "\n",path,SHMVB_CONTEXT_VERSION);
@@ -1125,8 +1319,13 @@ struct SharedMemoryContext* connectToSharedMemoryContextDescriptor(const char *p
     return context;
 }
 
-// Start writing to a video buffer
-// Spin until the writer lock is ours, or give up after ATTEMPTS_TO_LOCK_A_BUFFER tries.
+/**
+ * @brief Takes a stream's writer lock (VideoFrame::locked).
+ *
+ * Spins until the writer lock is ours, or gives up after ATTEMPTS_TO_LOCK_A_BUFFER tries.
+ * @param vf Stream.
+ * @return 1 once the lock is held, 0 on timeout.
+ */
 static int acquireWriterLock(struct VideoFrame *vf)
 {
     for (int attempts=0; attempts<ATTEMPTS_TO_LOCK_A_BUFFER; attempts++)
@@ -1137,6 +1336,7 @@ static int acquireWriterLock(struct VideoFrame *vf)
     return 0;
 }
 
+// Start writing to a video buffer
 int startWritingToVideoBufferPointer(struct VideoFrame *vf)
 {
     if (vf==0) { return 0; }
@@ -1177,6 +1377,7 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
         attempts = 0;
         while (attempts<ATTEMPTS_TO_LOCK_A_BUFFER)
         {
+            // Candidates in round-robin order starting after the latest slot
             for (unsigned int k=0; k<mapping->bufferCount; k++)
             {
                 unsigned int candidate = (vf->latestIndex + 1 + k) % mapping->bufferCount;
@@ -1208,6 +1409,8 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
 
     vf->writeIndex = chosen;
 
+    // Remember this write on this thread, so copy_to_shared_memory()/getVideoFrameDataPointer()
+    // target the claimed slot and the matching stop can find the mapping
     writeRecord->vf      = vf;
     writeRecord->mapping = mapping;
     writeRecord->aborted = 0;
@@ -1357,6 +1560,7 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
         record->registration = registration;
     }
 
+    // Filled last: until inUse is set, the record stays free and the read doesn't exist
     record->vf      = vf;
     record->mapping = mapping;
     record->index   = idx;

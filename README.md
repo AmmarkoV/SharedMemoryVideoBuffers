@@ -63,15 +63,14 @@ CMake mirrors all Makefile targets and uses the same compiler flags.
 
 ### `server` — Frame saver
 
-Reads all populated shared memory buffers and writes them to disk as PNM images. A debugging tool: `--nokb` writes a file per stream every 100 ms, so don't run it in production. Publishers don't need it running: `SharedMemoryManager` publishers and the C `client`, `viewer` and `publisher_data` create the context themselves.
+Reads all populated shared memory buffers and writes them to disk as PNM images each time Enter is pressed. A debugging tool, not for production. Publishers don't need it running: `SharedMemoryManager` publishers and the C `client`, `viewer` and `publisher_data` create the context themselves.
 
 ```bash
-./server           # Interactive: press Enter to snapshot all buffers
-./server --nokb    # Automated: snapshots every 100 ms without keyboard input
+./server           # Press Enter to snapshot all buffers
 ```
 
 Output files: `data/server_stream{i}.pnm`
-Responds to `SIGINT`/`SIGTERM` for clean shutdown.
+Stops on `SIGINT`/`SIGTERM` (also while waiting for Enter) or when standard input is closed, so it can't run in the background.
 
 ---
 
@@ -117,7 +116,7 @@ Connects to an existing stream `"stream1"`, locks it for reading, and saves the 
 
 ### `viewer` — X11 display window
 
-Opens an 800×600 X11 window and renders frames from stream `"stream1"` at approximately 33 FPS. Press any key to exit.
+Opens an X11 window that shows the frames of stream `"stream1"` and follows the stream's size. 3-channel frames are shown as RGB, 1-channel frames as grayscale, and frames with any other channel count (2, 4 or more) as grayscale averaged over the channels. It can start before the publisher: it waits for the stream. Press any key or close the window to exit.
 
 ```bash
 ./viewer
@@ -305,8 +304,8 @@ python3 src/python/client_downstream.py stream1
 ### Mixed C/Python pipeline
 
 ```bash
-# C server saves frames to disk
-./server --nokb &
+# C server saves frames to disk each time Enter is pressed (separate terminal)
+./server
 
 # Python publishes a webcam feed
 python3 src/python/client_upstream.py stream1

@@ -1,12 +1,15 @@
 /** @file publisher.c
- *  @brief  An example to organize a large number of concurrently working threads without
- *  too many lines of code or difficulty understanding what is happening
- *  https://github.com/AmmarkoV/SharedMemoryVideoBuffers
+ *  @brief  Example publisher: writes a 640x480 RGB frame of random pixels to the "stream1"
+ *  stream about 9 times a second, until SIGINT or SIGTERM, then destroys the stream.
+ *
+ *  Needs an existing "video_frames.shm" context (e.g. from server.c).
+ *
+ *  Repository : https://github.com/AmmarkoV/SharedMemoryVideoBuffers
  *  @author Ammar Qammaz (AmmarkoV)
  */
 
 //Can also be compiled using :
-//gcc  -O3 publisher.c -pthread -lm -o publisher
+//gcc  -O3 src/c/publisher.c src/c/sharedMemoryVideoBuffers.c -pthread -lrt -lm -o publisher
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -18,14 +21,25 @@
 
 #include "sharedMemoryVideoBuffers.h"
 
+/** @brief Cleared by handle_signal() to leave the publishing loop. */
 static volatile int running = 1;
 
+/**
+ * @brief SIGINT/SIGTERM handler: asks the publishing loop to stop.
+ * @param sig Signal number (unused).
+ */
 static void handle_signal(int sig)
 {
     (void)sig;
     running = 0;
 }
 
+/**
+ * @brief Publishes random frames on "stream1" until interrupted.
+ * @param argc Unused.
+ * @param argv Unused.
+ * @return EXIT_SUCCESS once interrupted, EXIT_FAILURE if the context or the stream can't be set up.
+ */
 int main(int argc, char *argv[])
 {
     const char *shm_name    = "video_frames.shm";
@@ -41,6 +55,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    // Create the stream, or join it if it already exists with this size
     createVideoFrameMetaData(context,stream_name,640,480,3);
 
     struct VideoFrame *frame = getVideoBufferPointer(context,stream_name);
@@ -54,6 +69,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    // Scratch frame, filled with new random pixels every iteration
     unsigned char *data = (unsigned char*)malloc(frame->frame_size);
 
     if (data!=0)
@@ -73,7 +89,9 @@ int main(int argc, char *argv[])
             data[i] = rand() % 255;
         }
 
+        // Timestamp 0: stamped with the current time
         copy_to_shared_memory((void *)frame, data, frame->frame_size, 0);
+        // Publishes the frame to readers and releases the writer lock
         stopWritingToVideoBufferPointer(frame);
      }
      usleep(115000);

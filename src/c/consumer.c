@@ -1,12 +1,16 @@
-/** @file example.c
- *  @brief  An example to organize a large number of concurrently working threads without
- *  too many lines of code or difficulty understanding what is happening
- *  https://github.com/AmmarkoV/SharedMemoryVideoBuffers
+/** @file consumer.c
+ *  @brief  Example consumer: reads the "stream1" stream through a VideoFrameLocalMapping and
+ *  saves the latest frame to data/consumer_stream0.pnm about 9 times a second, forever.
+ *
+ *  Needs an existing "video_frames.shm" context and "stream1" stream (e.g. from publisher.c),
+ *  and an existing data/ directory.
+ *
+ *  Repository : https://github.com/AmmarkoV/SharedMemoryVideoBuffers
  *  @author Ammar Qammaz (AmmarkoV)
  */
 
 //Can also be compiled using :
-//gcc  -O3 example.c -pthread -lm -o example
+//gcc  -O3 src/c/consumer.c src/c/sharedMemoryVideoBuffers.c -pthread -lrt -lm -o consumer
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -19,11 +23,18 @@
 
 
 
+/**
+ * @brief Saves frames of "stream1" to data/consumer_stream0.pnm until killed.
+ * @param argc Unused.
+ * @param argv Unused.
+ * @return EXIT_FAILURE if the context, the stream or the mapping isn't available.
+ */
 int main(int argc, char *argv[])
 {
     const char *shm_name    = "video_frames.shm";
     const char *stream_name = "stream1";
 
+    // A consumer only connects: it never creates the context or the stream
     struct SharedMemoryContext *context = connectToSharedMemoryContextDescriptor(shm_name);
     if (!context)
     {
@@ -36,6 +47,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    // Slot index of the stream, used to address it in the local mapping
     int item = resolveFeedNameToID(context,stream_name);
     if (item==-1)
     {
@@ -60,6 +72,7 @@ int main(int argc, char *argv[])
       // Example to read from buffer (Client)
       if (startReadingFromVideoBufferPointer(frame))
       {
+         // Resolves to the slot this read latched onto
          unsigned char * data = getLocalMappingPointer(localMap,item);
          writePNM("data/consumer_stream0.pnm",frame->width,frame->height,frame->channels,data);
          stopReadingFromVideoBufferPointer(frame);
