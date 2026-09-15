@@ -50,7 +50,11 @@ int main (int argc, char **argv)
     g_context  = context;
     g_localMap = localMap;
 
-    system("mkdir -p data/");
+
+    if ( system("mkdir -p data/")!=0 )
+    {
+      fprintf(stderr,"Could not create data/ directory");
+    }
     printf("Server is ready. Press Enter to encode frames.\n");
 
     while (running)
