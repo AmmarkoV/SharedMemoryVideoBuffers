@@ -17,6 +17,10 @@
 # they claim to detect; torn frames THERE are expected and are reported as
 # informational only, not a failure.
 #
+# framerate_benchmark then establishes the framerate a stream of a given image size
+# reaches (one writer and one reader, both as fast as they can) - reported, not
+# checked against a minimum, since it depends on the machine.
+#
 # Usage: test/run_tests.sh [duration_seconds_per_case]
 
 set -u
@@ -50,6 +54,7 @@ build timestamp_consistency_writer
 build timestamp_consistency_reader
 build protocol_edge_cases
 build registry_edge_cases
+build framerate_benchmark
 if ! "$CC" -O2 -Wall -shared -fPIC -I"$SRC_DIR" "$LIB_SRC" -o "$BIN_DIR/libSharedMemoryVideoBuffers.so" -pthread -lrt 2> "$LOG_DIR/build_library.log"
 then
     echo "BUILD FAILED: libSharedMemoryVideoBuffers.so"
@@ -135,6 +140,11 @@ run_single()
 # joining, replacing and destroying streams across processes (registry_edge_cases.c)
 run_single protocol_edge_cases shmvb_test_edge.shm "$BIN_DIR/protocol_edge_cases" shmvb_test_edge.shm edge
 run_single registry_edge_cases shmvb_test_reg_     "$BIN_DIR/registry_edge_cases"
+
+# Framerate for common image sizes: width height channels seconds (see framerate_benchmark.c
+# to also require a minimum framerate)
+run_single framerate_640x480x3   shmvb_test_fps "$BIN_DIR/framerate_benchmark" 640 480 3 "$DURATION"
+run_single framerate_1920x1080x3 shmvb_test_fps "$BIN_DIR/framerate_benchmark" 1920 1080 3 "$DURATION"
 
 # Python bindings (src/python/SharedMemoryManager.py) - see test_shared_memory_manager.py
 PYTHON="${PYTHON:-python3}"

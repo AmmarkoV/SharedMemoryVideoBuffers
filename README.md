@@ -76,10 +76,11 @@ Stops on `SIGINT`/`SIGTERM` (also while waiting for Enter) or when standard inpu
 
 ### `publisher` — Random-data publisher
 
-Connects to the shared memory context, creates stream `"stream1"` (640×480 RGB), and continuously writes random pixel data every 115 ms.
+Connects to the shared memory context, creates a stream (`"stream1"`, 640×480 RGB, unless another name and size are given), and writes a frame every 115 ms. 16 frames of random pixels are generated once at startup and published in turn.
 
 ```bash
-./publisher
+./publisher [stream_name] [width] [height] [channels]
+./publisher stream2 1920 1080 3
 ```
 
 ---
