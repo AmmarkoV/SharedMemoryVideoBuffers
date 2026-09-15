@@ -159,7 +159,7 @@ frame = smm.read_from_shared_memory()   # returns numpy array (a copy), or None
 with smm.read_frame() as view:          # view is a read-only numpy array, or None
     if view is not None:
         edges = cv2.Canny(view, 100, 200)
-        # smm.width, smm.height, smm.channels, smm.unix_timestamp describe this frame
+        # smm.width, smm.height, smm.channels, smm.unix_timestamp (Unix nanoseconds) describe this frame
 ```
 
 `read_frame()` keeps the frame's slot protected until the block exits, so `view` can't change while you use it:

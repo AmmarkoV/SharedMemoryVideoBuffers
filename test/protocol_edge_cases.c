@@ -19,6 +19,11 @@
  *                         neither publish nor release another writer's lock.
  *   7. unlocked_copy    - a copy_to_shared_memory() outside start/stop writing
  *                         stamps the slot it wrote, so pixels and timestamp match.
+ *   8. never_published  - a stream nothing was published to yet can't be read
+ *                         (its slots are zero-filled), and set-latest-timestamp
+ *                         can't make it readable.
+ *   9. unstamped_write  - a write that sets no timestamp publishes the current
+ *                         time in Unix nanoseconds, not an older frame's timestamp.
  *
  *  Exit code: 0 = all checks passed, 2 = a check failed, 1 = setup error.
  *
@@ -31,6 +36,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
+#include <time.h>
 
 #include "sharedMemoryVideoBuffers.h"
 
@@ -215,6 +221,40 @@ int main(int argc, char *argv[])
     memset(unlockedFrame, 9, sizeof(unlockedFrame));
     check(copy_to_shared_memory(frame, unlockedFrame, sizeof(unlockedFrame), 9) == 1, "unlocked_copy: copy succeeds");
     check(readLatest(frame, &pixel, &timestamp) && pixel == 9 && timestamp == 9, "unlocked_copy: pixels and timestamp belong to the same frame");
+
+    // 8. never_published
+    char unpublishedName[64];
+    snprintf(unpublishedName, sizeof(unpublishedName), "%s_unpublished", stream_name);
+    if (createVideoFrameMetaData(ctx, unpublishedName, 64, 48, 3) != 0) { return 1; }
+    struct VideoFrame *unpublished = getVideoBufferPointer(ctx, unpublishedName);
+    if (!unpublished) { return 1; }
+    int readBeforePublish = startReadingFromVideoBufferPointer(unpublished);
+    if (readBeforePublish) { stopReadingFromVideoBufferPointer(unpublished); }
+    check(!readBeforePublish, "never_published: reading before the first publish fails");
+    check(setLatestVideoFrameTimestamp(unpublished, 123) == 0 && !readLatest(unpublished, &pixel, &timestamp),
+          "never_published: setting the latest timestamp doesn't make it readable");
+    check(writeGeneration(unpublished, 3) && readLatest(unpublished, &pixel, &timestamp) && pixel == 3 && timestamp == 3,
+          "never_published: the first published frame is readable");
+    destroyVideoFrame(ctx, unpublishedName);
+
+    // 9. unstamped_write - the slot the write claims last held an older frame, stamped 11
+    if (!(frame = freshStream(ctx, stream_name))) { return 1; }
+    for (unsigned int k=0; k<frame->bufferCount; k++) { if (!writeGeneration(frame, 11)) { return 1; } }
+    struct timespec clockNow;
+    clock_gettime(CLOCK_REALTIME, &clockNow);
+    uint64_t beforeWrite = (uint64_t) clockNow.tv_sec * 1000000000 + (uint64_t) clockNow.tv_nsec;
+    if (!startWritingToVideoBufferPointer(frame)) { return 1; }
+    memset(getVideoFrameDataPointer(frame), 12, frame->frame_size); // in place, no timestamp
+    stopWritingToVideoBufferPointer(frame);
+    check(readLatest(frame, &pixel, &timestamp) && pixel == 12 && timestamp >= beforeWrite && timestamp < beforeWrite + 5000000000ULL,
+          "unstamped_write: an in-place write without a timestamp publishes the current time");
+    unsigned char autoFrame[64*48*3];
+    memset(autoFrame, 13, sizeof(autoFrame));
+    if (!startWritingToVideoBufferPointer(frame)) { return 1; }
+    copy_to_shared_memory(frame, autoFrame, sizeof(autoFrame), 0);
+    stopWritingToVideoBufferPointer(frame);
+    check(readLatest(frame, &pixel, &timestamp) && pixel == 13 && timestamp >= beforeWrite && timestamp < beforeWrite + 5000000000ULL,
+          "unstamped_write: copy_to_shared_memory(..., 0) stamps Unix nanoseconds");
 
     destroyVideoFrame(ctx, stream_name);
     shm_unlink(shm_name);

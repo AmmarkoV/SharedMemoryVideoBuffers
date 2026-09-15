@@ -8,7 +8,8 @@
                       the same manager again inside the block raises, and an exception in
                       the block still releases the slot
    set_timestamp    - set_timestamp() re-stamps the latest frame and never releases a
-                      writer lock held by someone else
+                      writer lock held by someone else; frames published without a
+                      timestamp carry the current time in Unix nanoseconds
    missing_stream   - connecting to a stream/descriptor that doesn't exist raises an
                       error that names it
    copy_validation  - copy_numpy_to_shared_memory() writes non-contiguous arrays in
@@ -18,6 +19,8 @@
    own_context      - a publisher creates its descriptor itself when none exists yet
    replaced_manager - a publisher replaced by another manager of the same stream in the
                       same process doesn't destroy the stream when it goes away
+   never_published  - a stream nothing was published to yet reads as None, not as a
+                      zero-filled frame with timestamp 0
 
 Exit code: 0 = all checks passed, 2 = a check failed, 1 = setup error.
 
@@ -28,6 +31,7 @@ import ctypes
 import gc
 import os
 import sys
+import time
 
 import numpy as np
 
@@ -134,6 +138,11 @@ def main():
     stillLocked = lockByte.value == b"\x01"
     lockByte.value = b"\x00"
     check(failedWhileLocked and stillLocked, "set_timestamp: doesn't release a writer lock held by someone else")
+    beforeWrite = time.time_ns()
+    writer.copy_numpy_to_shared_memory(solidFrame(6))
+    autoTimestamp = reader.get_timestamp()
+    check(autoTimestamp is not None and beforeWrite <= autoTimestamp <= time.time_ns(),
+          "set_timestamp: a frame published without a timestamp carries the current time in nanoseconds")
 
     # missing_stream
     check(raised(RuntimeError,
@@ -196,6 +205,8 @@ def main():
                                     width=WIDTH, height=HEIGHT, channels=CHANNELS)
     gc.collect()
     replacedReader = SharedMemoryManager(libraryPath, descriptor=shmName, frameName=replacedName, connect=True)
+    check(replacedReader.read_from_shared_memory() is None and replacedReader.get_timestamp() is None,
+          "never_published: a stream nothing was published to yet reads as None")
     replacedWritten = publisher.copy_numpy_to_shared_memory(solidFrame(60))
     replacedFrame = replacedReader.read_from_shared_memory()
     check(replacedWritten and replacedFrame is not None and np.all(replacedFrame == 60),

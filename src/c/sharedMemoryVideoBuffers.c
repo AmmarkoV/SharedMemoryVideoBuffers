@@ -284,6 +284,7 @@ struct tlsWriteEntry
     const struct VideoFrame *vf;
     struct localStreamMapping *mapping; //<- this process's mapping the write uses, kept mapped until stop
     int aborted; //<- last copy_to_shared_memory() of this write was rejected
+    int stamped; //<- this write set the slot's timestamp; otherwise stop stamps the current time
     int inUse;
 };
 
@@ -505,18 +506,20 @@ int resolveFeedNameToID(struct SharedMemoryContext * smvc, const char *feedName)
 
 
 
-// Auto-timestamp for writers that pass 0: MICROSECONDS since the Unix epoch.
-// time(NULL) only advances once a second, so every frame published inside the
-// same second carried an identical timestamp and any consumer using it as frame
-// identity (e.g. a "skip what I already processed" limiter) throttled to 1 Hz.
-static uint64_t getUnixTimestampMicroseconds()
+// Auto-timestamp for writers that pass 0: NANOSECONDS since the Unix epoch, the
+// unit the grabber publishes and the classifier reports. time(NULL) only advances
+// once a second, so every frame published inside the same second carried an
+// identical timestamp and any consumer using it as frame identity (e.g. a "skip
+// what I already processed" limiter) throttled to 1 Hz. Never 0: a slot whose
+// timestamp is 0 holds no published frame.
+static uint64_t getUnixTimestampNanoseconds()
 {
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME,&ts) != 0)
         {
-            return (uint64_t) time(NULL) * 1000000;
+            return (uint64_t) time(NULL) * 1000000000 + 1;
         }
-    return ((uint64_t) ts.tv_sec * 1000000) + ((uint64_t) ts.tv_nsec / 1000);
+    return ((uint64_t) ts.tv_sec * 1000000000) + (uint64_t) ts.tv_nsec;
 }
 
 // Function to copy data from a buffer to the shared memory buffer
@@ -552,8 +555,8 @@ int copy_to_shared_memory(struct VideoFrame *frame, const void* src, size_t n, u
              // Stamped per-slot (not a single shared field) so a reader holding
              // an older slot never sees a timestamp that belongs to a newer,
              // not-yet-visible-to-them frame.
-             frame->timestamps[slot] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
-             if (writeRecord != NULL) { writeRecord->aborted = 0; }
+             frame->timestamps[slot] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampNanoseconds();
+             if (writeRecord != NULL) { writeRecord->aborted = 0; writeRecord->stamped = 1; }
              return 1;
            } else { fprintf(stderr,"copy_to_shared_memory: Will not overflow target \n"); }
         } else { fprintf(stderr,"copy_to_shared_memory: Stream %s has no memory mapped \n",frame->name); }
@@ -718,7 +721,7 @@ int createSharedMemoryContextDescriptor(const char *path)
     memset(context, 0, total_size);
     snprintf(context->descriptorName, sizeof(context->descriptorName), "%s", path);
     // Seeded from the clock so backing object names never repeat, even after re-initializing
-    context->nextGeneration = getUnixTimestampMicroseconds();
+    context->nextGeneration = getUnixTimestampNanoseconds();
     context->version = SHMVB_CONTEXT_VERSION;
     context->magic   = SHMVB_CONTEXT_MAGIC;
     printSharedMemoryContextState(context);
@@ -1019,7 +1022,9 @@ void setVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timestamp)
   {
     // Only meaningful while a write is in flight (between start/stopWriting),
     // matching how copy_to_shared_memory stamps the slot it just wrote.
-    frame->timestamps[frame->writeIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
+    frame->timestamps[frame->writeIndex] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampNanoseconds();
+    struct tlsWriteEntry *writeRecord = tlsWriteFind(frame);
+    if (writeRecord != NULL) { writeRecord->stamped = 1; }
   }
 }
 
@@ -1206,6 +1211,7 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf)
     writeRecord->vf      = vf;
     writeRecord->mapping = mapping;
     writeRecord->aborted = 0;
+    writeRecord->stamped = 0;
     writeRecord->inUse   = 1;
 
     debug_message(GREEN "success\n" NORMAL);
@@ -1232,6 +1238,13 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf)
     struct localStreamMapping *mapping = writeRecord->mapping;
     writeRecord->inUse = 0;
 
+    // A writer that filled the slot in place without setting a timestamp would
+    // otherwise publish the timestamp of the older frame this slot last held
+    if ((!aborted) && (!writeRecord->stamped))
+    {
+        vf->timestamps[vf->writeIndex] = getUnixTimestampNanoseconds();
+    }
+
     if ((mapping->bufferCount > 1) && (!aborted))
     {
         // Publish: make the just-written slot the one readers will latch onto.
@@ -1256,9 +1269,11 @@ int setLatestVideoFrameTimestamp(struct VideoFrame *vf, uint64_t unix_timestamp)
     if (!acquireWriterLock(vf)) { return 0; }
     unsigned int index = vf->latestIndex;
     if (index >= MAX_LOCAL_BUFFERS) { index = 0; }
-    vf->timestamps[index] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampMicroseconds();
+    // Stamping a slot that never held a published frame would make it readable
+    int published = (vf->timestamps[index] != 0);
+    if (published) { vf->timestamps[index] = (unix_timestamp != 0) ? unix_timestamp : getUnixTimestampNanoseconds(); }
     __sync_lock_release(&vf->locked);
-    return 1;
+    return published;
 }
 
 // Start reading from a video buffer.
@@ -1301,11 +1316,11 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
     record->registered = 0;
     if (mapping->bufferCount <= 1)
     {
-        if (vf->locked)
+        if ((vf->locked) || (vf->timestamps[0] == 0))
         {
             endMappingUse(mapping);
             debug_message(RED "failed\n" NORMAL);
-            return 0; // Buffer is locked by a writer
+            return 0; // Buffer is locked by a writer, or nothing was published yet
         }
     } else
     {
@@ -1327,11 +1342,14 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
             __sync_bool_compare_and_swap(&vf->readers[entry], registration, 0); // stale, a publish raced us - retry
         }
 
-        if (idx >= mapping->bufferCount)
+        // idx beyond bufferCount: the stream was re-created with fewer slots right
+        // after we mapped it. Timestamp 0: nothing was published yet, the slot is
+        // still zero-filled (every published frame carries a non-zero timestamp).
+        if ((idx >= mapping->bufferCount) || (vf->timestamps[idx] == 0))
         {
-            // The stream was re-created with fewer slots right after we mapped it
             __sync_bool_compare_and_swap(&vf->readers[entry], registration, 0);
             endMappingUse(mapping);
+            debug_message(RED "failed (nothing published yet)\n" NORMAL);
             return 0;
         }
         record->registered   = 1;

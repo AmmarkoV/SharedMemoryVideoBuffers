@@ -79,7 +79,7 @@ struct VideoFrame
     unsigned int writeIndex;                                 //<- slot claimed by the writer; only meaningful while `locked`
     volatile unsigned int latestIndex;                       //<- slot most recently published as a complete frame
     volatile uint64_t readers[MAX_READERS_PER_STREAM];       //<- active reads: (reader PID << 32) | slot, 0 = free entry
-    volatile uint64_t timestamps[MAX_LOCAL_BUFFERS];         //<- per-slot unix epoch MICROSECONDS, refreshed each copy_to_shared_memory call
+    volatile uint64_t timestamps[MAX_LOCAL_BUFFERS];         //<- per-slot unix epoch NANOSECONDS (unless a writer passed another value); 0 = no frame published in this slot yet
     //-----------------------------------------------------------------------------------------------------------
     // Where this process mapped the pixels is tracked by the library per process
     // (see getVideoFrameDataPointer()), never in this shared structure.
@@ -267,7 +267,8 @@ int unmapLocalMappingItem(struct VideoFrameLocalMapping * localmap,unsigned int 
  * @param frame Pointer to the video frame structure.
  * @param src Pointer to the source data.
  * @param n Number of bytes to copy.
- * @param unix_timestamp Unix timestamp (microseconds since epoch) to associate with the frame. Pass 0 to use the current time.
+ * @param unix_timestamp Timestamp to associate with the frame, stored as given: by convention nanoseconds
+ * since the Unix epoch. Pass 0 to use the current time (nanoseconds).
  * @return 1 on success, 0 if the data was rejected (e.g. n larger than the frame). A rejected copy
  * inside start/stopWritingToVideoBufferPointer() is not published.
  */
@@ -307,7 +308,17 @@ unsigned long getVideoFrameDataSize(struct VideoFrame * frame);
 unsigned int getVideoFrameWidth(struct VideoFrame * frame);
 unsigned int getVideoFrameHeight(struct VideoFrame * frame);
 unsigned int getVideoFrameChannels(struct VideoFrame * frame);
+/**
+ * @brief Gets the frame's timestamp: nanoseconds since the Unix epoch, unless its writer passed a
+ * value in another unit. Between start/stopReadingFromVideoBufferPointer() it belongs to the frame
+ * being read; outside a read, to the latest frame. 0 only if no frame was published yet.
+ */
 uint64_t getVideoFrameTimestamp(struct VideoFrame * frame);
+
+/**
+ * @brief Sets the timestamp of the frame being written, between start/stopWritingToVideoBufferPointer().
+ * @param unix_timestamp Stored as given (by convention Unix nanoseconds); 0 = the current time.
+ */
 void setVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timestamp);
 
 /**
@@ -315,8 +326,8 @@ void setVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timestamp);
  * writing new pixel data. Takes the writer lock, so call it outside start/stopWritingToVideoBufferPointer().
  * Readers that already latched onto that frame may see the new timestamp.
  * @param frame Pointer to the video frame structure.
- * @param unix_timestamp Microseconds to store. Pass 0 to use the current time.
- * @return 1 on success, 0 if the writer lock could not be acquired.
+ * @param unix_timestamp Stored as given (by convention Unix nanoseconds). Pass 0 to use the current time.
+ * @return 1 on success, 0 if the writer lock could not be acquired or no frame was published yet.
  */
 int setLatestVideoFrameTimestamp(struct VideoFrame * frame, uint64_t unix_timestamp);
 
@@ -338,6 +349,8 @@ int startWritingToVideoBufferPointer(struct VideoFrame *vf);
  * @brief Stops writing to a video buffer, publishing the slot just written as
  * the new "latest" complete frame for readers. If the last copy_to_shared_memory()
  * of this write was rejected, nothing is published and the previous frame stays latest.
+ * A write that set no timestamp (e.g. filled getVideoFrameDataPointer() in place) is
+ * stamped with the current time, so it never carries the timestamp of an older frame.
  * @param vf Pointer to the video frame structure.
  * @return 1 on success, 0 if this thread has no write in progress on vf (nothing is
  * published and the writer lock is left alone).
@@ -357,8 +370,8 @@ int stopWritingToVideoBufferPointer(struct VideoFrame *vf);
  * If the stream was destroyed and re-created since this process last used it, the
  * read follows the new stream; memory of the old one stays mapped until reads and
  * writes still using it in this process have stopped.
- * @return 1 on success, 0 on failure (the slot holds no stream, a writer holds a
- * single-buffered stream, MAX_READERS_PER_STREAM reads are already in progress on this
+ * @return 1 on success, 0 on failure (the slot holds no stream, no frame was published
+ * to it yet, a writer holds a single-buffered stream, MAX_READERS_PER_STREAM reads are already in progress on this
  * stream, or this thread is already reading too many frames).
  */
 int startReadingFromVideoBufferPointer(struct VideoFrame *vf);

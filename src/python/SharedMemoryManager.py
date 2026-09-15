@@ -202,7 +202,7 @@ class SharedMemoryManager:
         self.height     = height
         self.channels   = channels
         self.frame_size = width * height * channels
-        self.unix_timestamp = 0 # set by every successful read
+        self.unix_timestamp = 0 # set by every successful read: nanoseconds since the Unix epoch
         self.connect    = connect
         self._thread_state = threading.local() # per-thread "inside a read_frame() block" flag
 
@@ -322,12 +322,12 @@ class SharedMemoryManager:
             self.libSharedMemoryVideoBuffers.stopReadingFromVideoBufferPointer(frame)
 
     def set_timestamp(self, unix_timestamp=0):
-        # Re-stamps the frame currently published as latest (0 = now). This takes
-        # the writer lock itself, so it waits for (and can time out on) a write
-        # that is in progress.
+        # Re-stamps the frame currently published as latest (Unix nanoseconds, 0 = now).
+        # This takes the writer lock itself, so it waits for (and can time out on) a
+        # write that is in progress.
         res = self.libSharedMemoryVideoBuffers.setLatestVideoFrameTimestamp(self.frame, ctypes.c_uint64(unix_timestamp))
         if res == 0:
-            raise RuntimeError("Failed to lock video buffer to set its timestamp")
+            raise RuntimeError("Failed to set the timestamp: the video buffer stayed locked, or no frame was published yet")
 
     @contextlib.contextmanager
     def read_frame(self):
@@ -338,10 +338,10 @@ class SharedMemoryManager:
                     process(view)
 
         `view` is a read-only numpy array pointing straight into shared memory,
-        or None if the frame couldn't be read. The writer won't reuse its slot
+        or None if the frame couldn't be read (including before the first frame is published). The writer won't reuse its slot
         until the block exits, so the view is a complete, unchanging frame for
         the whole block - but not after it: copy anything you need to keep.
-        smm.width/height/channels/unix_timestamp describe the frame.
+        smm.width/height/channels/unix_timestamp (nanoseconds since the Unix epoch) describe the frame.
 
         - Streams have 4 slots by default: the latest frame, the one being written,
           and room for two readers holding older frames. If readers hold all of them
