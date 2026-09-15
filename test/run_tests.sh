@@ -145,6 +145,7 @@ run_single registry_edge_cases shmvb_test_reg_     "$BIN_DIR/registry_edge_cases
 # to also require a minimum framerate)
 run_single framerate_640x480x3   shmvb_test_fps "$BIN_DIR/framerate_benchmark" 640 480 3 "$DURATION"
 run_single framerate_1920x1080x3 shmvb_test_fps "$BIN_DIR/framerate_benchmark" 1920 1080 3 "$DURATION"
+run_single framerate_1224x1024x4 shmvb_test_fps "$BIN_DIR/framerate_benchmark" 1224 1024 4 "$DURATION"
 
 # Python bindings (src/python/SharedMemoryManager.py) - see test_shared_memory_manager.py
 PYTHON="${PYTHON:-python3}"
