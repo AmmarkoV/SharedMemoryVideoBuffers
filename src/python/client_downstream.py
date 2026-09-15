@@ -1,3 +1,4 @@
+import time
 import cv2
 import numpy as np
 from SharedMemoryManager import SharedMemoryManager
@@ -9,30 +10,38 @@ def main(streamName):
                               frameName  = streamName,
                               connect    = True)
 
+    lastTimestamp = None   # timestamp of the frame on screen, so it isn't converted and shown again
+    reportedError = False  # report a stream that can't be read once, not on every poll
+
     # Loop to continuously read frames 
     while True:
-        # Capture frame-by-frame
-        frame = smm.read_from_shared_memory()
-        
-        # Check if the frame is captured successfully
-        if  (frame is None) or (smm.frame_size==0):
-            print("Error: Couldn't read frame from SHM")
-        else:        
-           #print("frame:",frame)
+        frame = None
+        # Zero-copy read: the view is only valid inside the block, so it is converted in there
+        # (cvtColor makes its own copy) instead of being copied first
+        with smm.read_frame() as view:
+            if (view is None) or (smm.frame_size==0):
+                if not reportedError:
+                    print("Error: Couldn't read frame from SHM")
+                    reportedError = True
+            elif (smm.unix_timestamp != lastTimestamp):
+                reportedError = False
+                lastTimestamp = smm.unix_timestamp
+                if (view.shape[2]==4):
+                   frame = cv2.cvtColor(view, cv2.COLOR_RGBA2GRAY)
+                   frame = np.transpose(frame, axes=None)
+                elif (view.shape[2]==3):
+                   frame = cv2.cvtColor(view, cv2.COLOR_BGR2RGB)
+                else:
+                   frame = view.copy()
 
+        if frame is not None:
            # Display the frame in a window
-           print("Frame RAW: ",frame.shape)
-           if (frame.shape[2]==4):
-              frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2GRAY)
-              frame = np.transpose(frame, axes=None)
-           elif (frame.shape[2]==3):
-              frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-           print("Frame Processed : ",frame.shape)
-
            cv2.imshow('SharedMemoryVideoBuffer', frame)
-        
-           # Break the loop if 'q' is pressed
-           if cv2.waitKey(1) & 0xFF == ord('q'):
+        else:
+           time.sleep(0.001) # no new frame yet: don't spin
+
+        # Break the loop if 'q' is pressed
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     
     # Release the webcam and close all OpenCV windows

@@ -56,9 +56,22 @@ static unsigned long sampleToMask(unsigned char sample, unsigned long mask)
  */
 static void convertFrameToXImage(XImage *image, const unsigned char *pixels, unsigned int width, unsigned int height, unsigned int channels)
 {
+    // Every sample value's bits in each channel, computed once instead of for every pixel
+    unsigned long redTable[256], greenTable[256], blueTable[256];
+    for (unsigned int sample = 0; sample < 256; sample++)
+    {
+        redTable[sample]   = sampleToMask((unsigned char) sample, image->red_mask);
+        greenTable[sample] = sampleToMask((unsigned char) sample, image->green_mask);
+        blueTable[sample]  = sampleToMask((unsigned char) sample, image->blue_mask);
+    }
+    // 24 and 32 bit pixels are written byte by byte, other sizes through the much slower XPutPixel()
+    unsigned int bytesPerPixel = ((image->bits_per_pixel == 24) || (image->bits_per_pixel == 32)) ? (unsigned int) image->bits_per_pixel / 8 : 0;
+    int lsbFirst = (image->byte_order == LSBFirst);
+
     for (unsigned int y = 0; y < height; y++)
     {
         const unsigned char *p = pixels + ((size_t) y * width * channels);
+        unsigned char *row = (unsigned char *) image->data + ((size_t) y * (size_t) image->bytes_per_line);
         for (unsigned int x = 0; x < width; x++)
         {
             unsigned char r, g, b;
@@ -75,8 +88,18 @@ static void convertFrameToXImage(XImage *image, const unsigned char *pixels, uns
                 for (unsigned int c = 0; c < channels; c++) { sum += p[c]; }
                 r = g = b = (unsigned char) (sum / channels);
             }
-            XPutPixel(image, (int) x, (int) y,
-                      sampleToMask(r, image->red_mask) | sampleToMask(g, image->green_mask) | sampleToMask(b, image->blue_mask));
+            unsigned long pixel = redTable[r] | greenTable[g] | blueTable[b];
+            if (bytesPerPixel == 0)
+            {
+                XPutPixel(image, (int) x, (int) y, pixel);
+            } else
+            {
+                unsigned char *destination = row + ((size_t) x * bytesPerPixel);
+                for (unsigned int i = 0; i < bytesPerPixel; i++)
+                {
+                    destination[lsbFirst ? i : (bytesPerPixel - 1 - i)] = (unsigned char) (pixel >> (8 * i));
+                }
+            }
             p += channels;
         }
     }

@@ -44,7 +44,7 @@ if __name__ == '__main__':
     streamName = "stream3"
     targetWidth  = 800
     targetHeight = 600
-    sleepTimeMS  = 30 / 1000
+    sleepTimeMS  = 30 / 1000  # frame period (seconds) for sources that don't report their frame rate
     loop = True  # Set this to False if looping is not desired
 
 
@@ -76,6 +76,12 @@ if __name__ == '__main__':
                               height = frame.shape[0],
                               channels = frame.shape[2])
 
+    # Publish at the source's frame rate: sleep until the next frame is due, so the time spent on
+    # each frame (decoding, resizing, showing, publishing) is part of the period, not added to it
+    sourceFPS     = cap.get(cv2.CAP_PROP_FPS)
+    framePeriod   = (1.0 / sourceFPS) if (sourceFPS > 0) else sleepTimeMS
+    nextFrameTime = time.monotonic()
+
     while cap.isOpened():
         ret, frame = cap.read()
         #if not ret:
@@ -106,8 +112,13 @@ if __name__ == '__main__':
             print("Terminating after keyboard request")
             break
 
-        if (sleepTimeMS!=0):
-            time.sleep(sleepTimeMS) 
+        if (framePeriod!=0):
+            nextFrameTime += framePeriod
+            delay = nextFrameTime - time.monotonic()
+            if (delay > 0):
+                time.sleep(delay)
+            else:
+                nextFrameTime = time.monotonic() # running late: carry on instead of rushing to catch up
 
 
     cap.release()
