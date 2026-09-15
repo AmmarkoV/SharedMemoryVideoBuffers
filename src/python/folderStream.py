@@ -164,6 +164,9 @@ if __name__ == '__main__':
      cap = FolderStreamer(path = source)#,width = 800,height = 600)
 
      ret, frame = cap.read()
+     if not ret:
+         eprint("Error: Could not read a first frame from", source)
+         sys.exit(1)
 
      delayMilliseconds = 30
      width      = frame.shape[1]
@@ -181,6 +184,8 @@ if __name__ == '__main__':
 
      while not cap.should_stop:
        ret, frame = cap.read()
+       if not ret:
+          break  # end of a non-looping sequence, or a frame that failed to decode
 
        if (channels==3):
           frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

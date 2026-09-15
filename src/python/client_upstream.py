@@ -14,7 +14,11 @@ def main(streamName):
         return
     
     ret, frame = cap.read()
-    smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
+    if not ret or frame is None:
+        print("Error: Couldn't read a first frame from the webcam")
+        cap.release()
+        return
+    smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so",
                               descriptor = "video_frames.shm", 
                               frameName  = streamName, 
                               width      = frame.shape[1],

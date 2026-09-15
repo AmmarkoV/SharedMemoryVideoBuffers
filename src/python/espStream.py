@@ -118,7 +118,10 @@ if __name__ == '__main__':
      cap = ESP32CamStreamer(url = source)
 
      ret, frame = cap.read()
-     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so", 
+     if not ret or frame is None:
+         print("Error: Could not read a first frame from", source, file=sys.stderr)
+         sys.exit(1)
+     smm = SharedMemoryManager("libSharedMemoryVideoBuffers.so",
                                descriptor = "video_frames.shm", 
                                frameName  = streamName, 
                                width      = frame.shape[1],
@@ -127,6 +130,9 @@ if __name__ == '__main__':
 
      while not cap.should_stop:
        ret, frame = cap.read()
+       if not ret or frame is None:
+          print("Error: Couldn't read frame from", source, file=sys.stderr)
+          continue
 
        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
        smm.copy_numpy_to_shared_memory(frame)

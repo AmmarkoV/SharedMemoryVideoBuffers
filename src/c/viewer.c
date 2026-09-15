@@ -56,13 +56,24 @@ static unsigned long sampleToMask(unsigned char sample, unsigned long mask)
  */
 static void convertFrameToXImage(XImage *image, const unsigned char *pixels, unsigned int width, unsigned int height, unsigned int channels)
 {
-    // Every sample value's bits in each channel, computed once instead of for every pixel
-    unsigned long redTable[256], greenTable[256], blueTable[256];
-    for (unsigned int sample = 0; sample < 256; sample++)
+    // Every sample value's bits in each channel. The masks only depend on the
+    // display's visual, which never changes at runtime, so the tables are built
+    // once and reused for every frame instead of costing 3*256 shifts per redraw.
+    static int haveTables = 0;
+    static unsigned long cachedRedMask = 0, cachedGreenMask = 0, cachedBlueMask = 0;
+    static unsigned long redTable[256], greenTable[256], blueTable[256];
+    if (!haveTables || (cachedRedMask != image->red_mask) || (cachedGreenMask != image->green_mask) || (cachedBlueMask != image->blue_mask))
     {
-        redTable[sample]   = sampleToMask((unsigned char) sample, image->red_mask);
-        greenTable[sample] = sampleToMask((unsigned char) sample, image->green_mask);
-        blueTable[sample]  = sampleToMask((unsigned char) sample, image->blue_mask);
+        for (unsigned int sample = 0; sample < 256; sample++)
+        {
+            redTable[sample]   = sampleToMask((unsigned char) sample, image->red_mask);
+            greenTable[sample] = sampleToMask((unsigned char) sample, image->green_mask);
+            blueTable[sample]  = sampleToMask((unsigned char) sample, image->blue_mask);
+        }
+        cachedRedMask   = image->red_mask;
+        cachedGreenMask = image->green_mask;
+        cachedBlueMask  = image->blue_mask;
+        haveTables = 1;
     }
     // 24 and 32 bit pixels are written byte by byte, other sizes through the much slower XPutPixel()
     unsigned int bytesPerPixel = ((image->bits_per_pixel == 24) || (image->bits_per_pixel == 32)) ? (unsigned int) image->bits_per_pixel / 8 : 0;

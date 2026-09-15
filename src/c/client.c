@@ -62,6 +62,18 @@ int main(int argc, char *argv[])
 
     srand((unsigned int)time(NULL)); // Seed the random number generator
 
+    // Scratch buffers, allocated once: malloc/free on every iteration (at up to
+    // ~200 Hz here) cost far more than the shared-memory copy they wrap
+    unsigned char *data   = (unsigned char*)malloc(frame->frame_size);
+    unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
+    if ((data==0) || (buffer==0))
+    {
+        fprintf(stderr,"Could not allocate %zu bytes of scratch buffers\n",frame->frame_size);
+        free(data);
+        free(buffer);
+        return EXIT_FAILURE;
+    }
+
     while (1)
     {
     printSharedMemoryContextState(context);
@@ -69,7 +81,6 @@ int main(int argc, char *argv[])
     // Example to write to buffer (Client)
     if (startWritingToVideoBufferPointer(frame))
     {
-        unsigned char *data = (unsigned char*)malloc(frame->frame_size);
         for (size_t i = 0; i < frame->frame_size; i++)
         {
             data[i] = rand() % 255;
@@ -81,7 +92,6 @@ int main(int argc, char *argv[])
         //memcpy(frame->data, data, frame->frame_size);
         // Publishes the frame to readers and releases the writer lock
         stopWritingToVideoBufferPointer(frame);
-        free(data);
     }
      usleep(5000);
 
@@ -89,22 +99,16 @@ int main(int argc, char *argv[])
     // Example to read from buffer (Client)
     if (startReadingFromVideoBufferPointer(frame))
     {
-        unsigned char *buffer = (unsigned char*)malloc(frame->frame_size);
-        if (buffer!=0)
-        {
          // The pointer is only valid until stopReadingFromVideoBufferPointer(): copy what is needed first
          memcpy(buffer, getVideoFrameDataPointer(frame), frame->frame_size);
          stopReadingFromVideoBufferPointer(frame);
-         free(buffer);
-        } else
-        {
-         fprintf(stderr,"Failed reading back dummy data..\n");
-        }
     }
      usleep(5000);
 
     }
 
+    free(data);
+    free(buffer);
     destroyVideoFrame(context,stream_name);
 
     fprintf(stderr,"Done..\n");
