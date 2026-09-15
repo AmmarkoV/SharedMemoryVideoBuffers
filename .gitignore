@@ -1,0 +1,17 @@
+# Build output (Makefile / CMakeLists.txt)
+/client
+/consumer
+/publisher
+/server
+/viewer
+/publisher_data
+*.so
+/obj/
+/build/
+
+# Snapshots written by server.c / consumer.c / test example programs
+/data/
+
+# Python
+__pycache__/
+*.pyc

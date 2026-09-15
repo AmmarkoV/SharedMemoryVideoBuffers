@@ -69,10 +69,15 @@ extern "C"
 /** @brief Maximum number of streams in one SharedMemoryContext (the size of SharedMemoryContext::buffer). */
 #define MAX_NUMBER_OF_BUFFERS 10
 
-/** @brief How many times a lock (writer lock, registry lock) or a free slot is retried before giving up. */
-#define ATTEMPTS_TO_LOCK_A_BUFFER 1000
+/** @brief How many times a lock (writer lock, registry lock), a free slot, or a reader
+ *  registration is retried before giving up. Kept high so a legitimate wait (a slow
+ *  reader, a burst of writes racing a new reader's registration) is never mistaken
+ *  for a stuck lock. */
+#define ATTEMPTS_TO_LOCK_A_BUFFER 100000
 /** @brief Sleep between two of the ATTEMPTS_TO_LOCK_A_BUFFER attempts. usleep() oversleeps such
- *  short requests, so giving up takes tens of milliseconds in practice. */
+ *  short requests, so giving up takes on the order of seconds in practice. Not used by every
+ *  retry loop: the reader-registration race in startReadingFromVideoBufferPointer() retries
+ *  without sleeping, since it only spins while a publish is genuinely racing it. */
 #define SLEEP_TIME_BETWEEN_LOCK_ATTEMPTS_MICROSECONDS 10
 
 /** @brief Number of physical copies ("slots") kept per stream.

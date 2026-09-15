@@ -63,24 +63,26 @@ static void debug_message(const char *format, ...)
  * so it stalls until the lock timeout and drops the frame; every extra slot lets
  * one more slow reader hold a frame without stalling the writer.
  *
- * The environment is read once per process; values outside 1..MAX_LOCAL_BUFFERS are ignored.
+ * The environment is read once per process (pthread_once-guarded, so concurrent
+ * first calls from different threads never race on the cache); values outside
+ * 1..MAX_LOCAL_BUFFERS are ignored.
  * @return The slot count for new streams.
  */
+static unsigned int configuredBufferCountCache = MAX_LOCAL_BUFFERS;
+static pthread_once_t configuredBufferCountOnce = PTHREAD_ONCE_INIT;
+static void initConfiguredBufferCount()
+{
+    const char * env = getenv("SHMVB_BUFFER_COUNT");
+    if (env != NULL)
+    {
+        int parsed = atoi(env);
+        if (parsed >= 1 && parsed <= MAX_LOCAL_BUFFERS) { configuredBufferCountCache = (unsigned int) parsed; }
+    }
+}
 static unsigned int getConfiguredBufferCount()
 {
-    static int cached = -1;
-    if (cached == -1)
-    {
-        int n = MAX_LOCAL_BUFFERS;
-        const char * env = getenv("SHMVB_BUFFER_COUNT");
-        if (env != NULL)
-        {
-            int parsed = atoi(env);
-            if (parsed >= 1 && parsed <= MAX_LOCAL_BUFFERS) { n = parsed; }
-        }
-        cached = n;
-    }
-    return (unsigned int) cached;
+    pthread_once(&configuredBufferCountOnce, initConfiguredBufferCount);
+    return configuredBufferCountCache;
 }
 
 /**
@@ -496,24 +498,6 @@ static int claimReaderEntry(struct VideoFrame *vf, uint64_t registration)
     return -1;
 }
 
-/**
- * @brief Integer power, used for the PNM maximum sample value.
- * @param base Base.
- * @param exp Exponent.
- * @return base raised to exp (1 if exp is 0), wrapping on overflow.
- */
-static unsigned int simplePowPPM(unsigned int base,unsigned int exp)
-{
-    if (exp==0) return 1;
-    unsigned int retres=base;
-    unsigned int i=0;
-    for (i=0; i<exp-1; i++)
-    {
-        retres*=base;
-    }
-    return retres;
-}
-
 int writePNM(const char * filename,int width,int height,int channels, unsigned char * data)
 {
     //fprintf(stderr,"saveRawImageToFile(%s) called\n",filename);
@@ -544,7 +528,7 @@ int writePNM(const char * filename,int width,int height,int channels, unsigned c
     }
 
     // Header: magic, dimensions and the maximum sample value (255 for 8-bit samples)
-    int ok = (fprintf(fd, "%s\n%d %d\n%u\n", magic, width, height, simplePowPPM(2,8)-1) > 0);
+    int ok = (fprintf(fd, "%s\n%d %d\n%u\n", magic, width, height, 255) > 0);
     ok = ok && (fwrite(data, 1, n, fd) == n);
     // fclose() flushes: a failed flush (e.g. disk full) is a failed write too
     ok = (fclose(fd) == 0) && ok;
@@ -765,18 +749,21 @@ int remoteSharedMemoryContextVideoFrameIsPopulated(struct SharedMemoryContext *c
  * unless the caller opted in. DEBUG_MESSAGES is a compile-time switch and
  * this function is called far too often (every frame, from several example
  * binaries and from the Python wrapper) to compile it in unconditionally.
- * The environment is read once per process.
+ * The environment is read once per process (pthread_once-guarded, so concurrent
+ * first calls from different threads never race on the cache).
  * @return 1 if SHMVB_VERBOSE is "1" or "true", 0 otherwise.
  */
+static int verboseEnabledCache = 0;
+static pthread_once_t verboseEnabledOnce = PTHREAD_ONCE_INIT;
+static void initVerboseEnabled()
+{
+    const char * env = getenv("SHMVB_VERBOSE");
+    verboseEnabledCache = (env != NULL) && (strcmp(env,"1")==0 || strcmp(env,"true")==0);
+}
 static int verboseEnabled()
 {
-    static int cached = -1;
-    if (cached == -1)
-    {
-        const char * env = getenv("SHMVB_VERBOSE");
-        cached = (env != NULL) && (strcmp(env,"1")==0 || strcmp(env,"true")==0);
-    }
-    return cached;
+    pthread_once(&verboseEnabledOnce, initVerboseEnabled);
+    return verboseEnabledCache;
 }
 
 void printSharedMemoryContextState(struct SharedMemoryContext *context)
@@ -1316,7 +1303,7 @@ int destroyVideoFrame(struct SharedMemoryContext* context, const char *streamNam
     frame->is_populated = 0;
     if (shm_unlink(frame->backingName) == -1)
     {
-        debug_message("shm_unlink frame");
+        fprintf(stderr,"shm_unlink frame %s failed: %s\n",frame->backingName,strerror(errno));
     }
     releaseMapping(frame);
 
@@ -1605,8 +1592,9 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
     {
         pid_t pid = getpid();
         uint64_t registration;
-        int entry;
-        for (;;)
+        int entry = -1;
+        int attempts;
+        for (attempts=0; attempts<ATTEMPTS_TO_LOCK_A_BUFFER; attempts++)
         {
             idx          = vf->latestIndex;
             registration = packReaderRegistration(pid, idx);
@@ -1619,6 +1607,14 @@ int startReadingFromVideoBufferPointer(struct VideoFrame *vf)
             }
             if (vf->latestIndex == idx) { break; } // still current - we're protected
             __sync_bool_compare_and_swap(&vf->readers[entry], registration, 0); // stale, a publish raced us - retry
+            entry = -1;
+        }
+        if (entry == -1)
+        {
+            // Every attempt raced a fresh publish - give up rather than spin forever
+            endMappingUse(mapping);
+            debug_message(RED "failed (could not latch onto a stable slot)\n" NORMAL);
+            return 0;
         }
 
         // idx beyond bufferCount: the stream was re-created with fewer slots right
