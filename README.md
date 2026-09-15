@@ -116,10 +116,11 @@ Connects to an existing stream `"stream1"`, locks it for reading, and saves the 
 
 ### `viewer` — X11 display window
 
-Opens an X11 window that shows the frames of stream `"stream1"` and follows the stream's size. 3-channel frames are shown as RGB, 1-channel frames as grayscale, and frames with any other channel count (2, 4 or more) as grayscale averaged over the channels. It can start before the publisher: it waits for the stream. Press any key or close the window to exit.
+Opens an X11 window that shows the frames of a stream (`"stream1"` unless another name is given) and follows the stream's size. 3-channel frames are shown as RGB, 1-channel frames as grayscale, and frames with any other channel count (2, 4 or more) as grayscale averaged over the channels. It can start before the publisher: it waits for the stream. Press any key or close the window to exit.
 
 ```bash
-./viewer
+./viewer [stream_name]
+./viewer stream3       # e.g. the default stream of openCVStream.py
 ```
 
 Requires `libX11`. Links against `libSharedMemoryVideoBuffers.so`.

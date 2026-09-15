@@ -1,6 +1,8 @@
 /** @file viewer.c
- *  @brief  Example X11 viewer: shows the frames of the "stream1" stream in a window, until a key
- *  is pressed or the window is closed.
+ *  @brief  Example X11 viewer: shows the frames of a stream ("stream1" unless another name is
+ *  given as the first argument) in a window, until a key is pressed or the window is closed.
+ *
+ *  Usage: viewer [stream_name]
  *
  *  - 3 channel frames are shown as RGB.
  *  - 1 channel frames are shown as grayscale.
@@ -104,13 +106,15 @@ static XImage * createImage(Display *display, Visual *visual, int depth, unsigne
 }
 
 /**
- * @brief Shows "stream1" until a key is pressed or the window is closed.
+ * @brief Shows a stream until a key is pressed or the window is closed.
+ * @param argc Number of arguments.
+ * @param argv argv[1], if given, is the name of the stream to show (default "stream1").
  * @return EXIT_SUCCESS when closed, EXIT_FAILURE on setup errors.
  */
-int main()
+int main(int argc, char *argv[])
 {
     const char *shm_name    = "video_frames.shm";
-    const char *stream_name = "stream1";
+    const char *stream_name = (argc > 1) ? argv[1] : "stream1";
 
     // Open connection to the X server
     Display *display = XOpenDisplay(NULL);
