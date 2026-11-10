@@ -1,7 +1,9 @@
 #pip install numpy opencv-python --user
 
+import argparse
 import numpy as np
 import os
+import re
 import sys
 import cv2
 import time
@@ -41,21 +43,41 @@ def resize_with_padding(image, width, height, DO_PADDING=True, TINY_FLOAT=1e-5):
     return padded_image
 
 if __name__ == '__main__':
-    streamName = "stream3"
-    targetWidth  = 800
-    targetHeight = 600
+    parser = argparse.ArgumentParser(description="Publish a video file or camera to a shared memory stream")
+    parser.add_argument("source", nargs="?", default="./", help="video path, camera index (0) or /dev/videoN")
+    parser.add_argument("streamName", nargs="?", default="stream3", help="name of the published stream")
+    parser.add_argument("--size", nargs=2, type=int, metavar=("W", "H"),
+                        help="published size (default 800 600), also requested from a camera")
+    parser.add_argument("--fps", type=float,
+                        help="publishing rate (default: the source's), also requested from a camera")
+    args = parser.parse_args()
+    if (args.size is not None) and (min(args.size) <= 0):
+        parser.error("--size values must be positive")
+    if (args.fps is not None) and (args.fps <= 0):
+        parser.error("--fps must be positive")
+
+    streamName = args.streamName
+    targetWidth, targetHeight = args.size if (args.size is not None) else (800, 600)
     sleepTimeMS  = 30 / 1000  # frame period (seconds) for sources that don't report their frame rate
     loop = True  # Set this to False if looping is not desired
 
-
-    source = "./"
-    if len(sys.argv) > 1:
-        source = sys.argv[1]
-    if len(sys.argv) > 2:
-        streamName = sys.argv[2]
+    # OpenCV treats any string as a filename, so a camera has to be passed as an integer
+    source = args.source
+    cameraMatch = re.fullmatch(r'(?:/dev/video)?(\d+)', source)
+    isCamera = (cameraMatch is not None)
+    if isCamera:
+        source = int(cameraMatch.group(1))
 
     # Open the video source
     cap = cv2.VideoCapture(source)
+    if isCamera and ((args.size is not None) or (args.fps is not None)):
+        # Most UVC webcams only offer high resolutions and framerates under MJPG
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        if args.size is not None:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, targetWidth)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, targetHeight)
+        if args.fps is not None:
+            cap.set(cv2.CAP_PROP_FPS, args.fps)
     if not cap.isOpened():
         eprint("Error: Could not open video source")
         sys.exit(1)
@@ -79,6 +101,8 @@ if __name__ == '__main__':
     # Publish at the source's frame rate: sleep until the next frame is due, so the time spent on
     # each frame (decoding, resizing, showing, publishing) is part of the period, not added to it
     sourceFPS     = cap.get(cv2.CAP_PROP_FPS)
+    if args.fps is not None:
+        sourceFPS = args.fps
     framePeriod   = (1.0 / sourceFPS) if (sourceFPS > 0) else sleepTimeMS
     nextFrameTime = time.monotonic()
 

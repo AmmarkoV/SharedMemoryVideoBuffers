@@ -228,13 +228,14 @@ Loops through the sequence continuously. Supports optional aspect-ratio-preservi
 Streams any OpenCV-readable video file (MP4, AVI, …) or camera index into shared memory.
 
 ```bash
-python3 src/python/openCVStream.py <video_source> [stream_name]
+python3 src/python/openCVStream.py <video_source> [stream_name] [--size W H] [--fps HZ]
 # examples:
 python3 src/python/openCVStream.py test.mp4 stream3
 python3 src/python/openCVStream.py 0 stream3          # camera index
+python3 src/python/openCVStream.py /dev/video0 shm1 --size 640 480 --fps 30
 ```
 
-Default stream name: `stream3`. Loops video on end-of-file.
+Default stream name: `stream3`. Loops video on end-of-file. Frames are published at 800x600 unless `--size` is given, with black bars to keep the aspect ratio. `--size` and `--fps` are also requested from a camera, and `--fps` overrides the source's publishing rate.
 
 ---
 
