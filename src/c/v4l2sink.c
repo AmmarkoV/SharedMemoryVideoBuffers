@@ -10,11 +10,16 @@
  *    -r, --fps N          advertised frame rate; the last frame is re-sent if the publisher is
  *                         slower than this, so consumers don't time out (0 = never re-send; default 30)
  *    -b, --swap-rb        the stream holds BGR(A) instead of RGB(A) (e.g. OpenCV publishers)
+ *    -l, --label NAME     name of the camera if the device has to be created (default "SHMVB Camera")
+ *    -n, --no-create      fail instead of creating a missing device
+ *        --create-device  only create the device (if missing) and exit; needs root
  *    -h, --help
  *
- *  The device must exist first, e.g.:
- *    sudo modprobe v4l2loopback devices=1 video_nr=43 card_label="SHMVB Camera" exclusive_caps=1
- *  (see scripts/v4l2_setup.sh).
+ *  If the device doesn't exist it is created through v4l2loopback's control node
+ *  (/dev/v4l2loopback, module 0.13 or newer), like "v4l2loopback-ctl add" does, so existing
+ *  loopback devices and the programs using them are left alone. If the module isn't loaded it
+ *  is loaded with just this device. Both need root: when not root, v4l2sink re-runs itself
+ *  through sudo for that one step (--create-device), and continues as the calling user.
  *
  *  Each frame is converted into a private staging buffer while the stream's read lock is held,
  *  and the lock is released before write()ing to the device, so a slow V4L2 consumer never
@@ -33,6 +38,8 @@
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 #include <linux/videodev2.h>
 
@@ -82,6 +89,154 @@ static const char *nameOf(enum PixelOutputFormat fmt)
     return "?";
 }
 
+/* ---- v4l2loopback device creation -------------------------------------------------------- */
+
+/* From v4l2loopback.h (0.13+): the control node's ADD ioctl. The ioctl numbers carry no size,
+ * so the struct layout must match the module: older (0.12) modules lack the min_* fields and
+ * are refused by version check below. */
+#define V4L2LOOPBACK_CTL_ADD 0x4C80
+struct v4l2_loopback_config
+{
+    int32_t  output_nr;
+    int32_t  unused;            /* capture_nr in old versions; must be the same as output_nr or -1 */
+    char     card_label[32];
+    uint32_t min_width, max_width, min_height, max_height; /* 0 = module defaults */
+    int32_t  max_buffers, max_openers;                    /* <= 0 = module defaults */
+    int32_t  debug;
+    int32_t  announce_all_caps; /* 0 = exclusive caps (needed for browsers to list it), -1 = default */
+};
+
+#define LOOPBACK_SYSFS "/sys/module/v4l2loopback"
+#define LOOPBACK_CONTROL "/dev/v4l2loopback"
+
+/** @return N for "/dev/videoN", -1 otherwise. */
+static int videoNumberOf(const char *path)
+{
+    const char *p = strrchr(path, '/');
+    p = p ? p + 1 : path;
+    if (strncmp(p, "video", 5) != 0 || p[5] == '\0') { return -1; }
+    char *end;
+    long n = strtol(p + 5, &end, 10);
+    return (*end == '\0' && n >= 0 && n < 256) ? (int) n : -1;
+}
+
+/** Runs argv (searched in PATH), @return its exit status, or -1. */
+static int runCommand(char *const argv[])
+{
+    pid_t pid = fork();
+    if (pid < 0) { return -1; }
+    if (pid == 0) { execvp(argv[0], argv); _exit(127); }
+    int status;
+    while (waitpid(pid, &status, 0) < 0) { if (errno != EINTR) { return -1; } }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/** @return module version as major*10000+minor*100+patch, 0 if unknown. */
+static int loopbackVersion(void)
+{
+    FILE *f = fopen(LOOPBACK_SYSFS "/version", "r");
+    if (!f) { return 0; }
+    int a = 0, b = 0, c = 0;
+    int n = fscanf(f, "%d.%d.%d", &a, &b, &c);
+    fclose(f);
+    return (n >= 2) ? a * 10000 + b * 100 + c : 0;
+}
+
+/** Creates /dev/video<nr> as root. @return 1 on success, 0 on failure (errno set). */
+static int createLoopbackDevice(int nr, const char *label)
+{
+    struct stat st;
+    if (stat(LOOPBACK_SYSFS, &st) != 0)
+    {
+        // Module not loaded: load it with just this device
+        char nrArg[32], labelArg[64];
+        snprintf(nrArg, sizeof(nrArg), "video_nr=%d", nr);
+        snprintf(labelArg, sizeof(labelArg), "card_label=%s", label);
+        for (char *c = labelArg; *c; c++) { if (*c == ' ' || *c == ',' || *c == '"') { *c = '_'; } }
+        char *argv[] = { "modprobe", "v4l2loopback", "devices=1", nrArg, labelArg, "exclusive_caps=1", NULL };
+        fprintf(stderr, "Loading v4l2loopback for /dev/video%d\n", nr);
+        if (runCommand(argv) != 0) { fprintf(stderr, "modprobe v4l2loopback failed (is v4l2loopback-dkms installed?)\n"); errno = ENODEV; return 0; }
+        return 1;
+    }
+
+    int version = loopbackVersion();
+    if (version != 0 && version < 1300)
+    {
+        fprintf(stderr, "v4l2loopback %d.%d.%d is too old to add devices at runtime (needs 0.13+).\n"
+                        "Reload it with the extra device: sudo modprobe -r v4l2loopback && "
+                        "sudo modprobe v4l2loopback video_nr=...,%d exclusive_caps=1,...\n",
+                version / 10000, version / 100 % 100, version % 100, nr);
+        errno = ENOTSUP;
+        return 0;
+    }
+
+    int ctl = open(LOOPBACK_CONTROL, O_RDWR);
+    if (ctl < 0)
+    {
+        int err = errno;
+        if (err != EACCES && err != EPERM) { fprintf(stderr, "Can't open %s: %s\n", LOOPBACK_CONTROL, strerror(err)); }
+        errno = err;
+        return 0;
+    }
+    struct v4l2_loopback_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.output_nr         = nr;
+    cfg.unused            = -1;
+    cfg.announce_all_caps = 0;
+    cfg.debug             = 0;
+    snprintf(cfg.card_label, sizeof(cfg.card_label), "%s", label);
+    int ret = ioctl(ctl, V4L2LOOPBACK_CTL_ADD, &cfg);
+    int err = errno;
+    close(ctl);
+    if (ret < 0)
+    {
+        fprintf(stderr, "Creating /dev/video%d failed: %s%s\n", nr, strerror(err),
+                (err == EEXIST || err == EBUSY) ? " (that number is taken by another device)" : "");
+        errno = err;
+        return 0;
+    }
+    fprintf(stderr, "Created /dev/video%d \"%s\"\n", nr, cfg.card_label);
+    return 1;
+}
+
+/** Makes sure path exists, creating it (via sudo when not root) if allowed. @return 1 if it exists. */
+static int ensureDevice(const char *path, const char *label, int allowCreate)
+{
+    if (access(path, F_OK) == 0) { return 1; }
+    int nr = videoNumberOf(path);
+    if (!allowCreate || nr < 0)
+    {
+        fprintf(stderr, "%s doesn't exist%s\n", path, (nr < 0) ? " (and isn't a /dev/videoN path, so it can't be created)" : "");
+        return 0;
+    }
+
+    int created = 0;
+    if (geteuid() == 0)
+    {
+        created = createLoopbackDevice(nr, label);
+    } else
+    {
+        // Only the creation needs root: re-run just that step through sudo
+        char self[4096];
+        ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+        if (n <= 0) { fprintf(stderr, "Can't find own executable to create %s\n", path); return 0; }
+        self[n] = '\0';
+        fprintf(stderr, "%s doesn't exist, creating it (needs sudo)\n", path);
+        char *argv[] = { "sudo", "--", self, "--create-device", "-d", (char *) path, "-l", (char *) label, NULL };
+        created = (runCommand(argv) == 0);
+    }
+    if (!created) { return 0; }
+
+    // udev creates the node asynchronously
+    for (int i = 0; i < 50; i++)
+    {
+        if (access(path, F_OK) == 0) { return 1; }
+        usleep(100000);
+    }
+    fprintf(stderr, "%s was created but its node didn't appear\n", path);
+    return 0;
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -91,7 +246,10 @@ static void usage(const char *argv0)
             "  -d, --device PATH   v4l2loopback device (default /dev/video43)\n"
             "  -f, --format FMT    output pixel format (default auto: grey for 1 channel, else yuyv)\n"
             "  -r, --fps N         advertised frame rate, last frame re-sent when idle (0 = no re-send, default 30)\n"
-            "  -b, --swap-rb       stream holds BGR(A) instead of RGB(A)\n",
+            "  -b, --swap-rb       stream holds BGR(A) instead of RGB(A)\n"
+            "  -l, --label NAME    camera name if the device has to be created (default \"SHMVB Camera\")\n"
+            "  -n, --no-create     fail instead of creating a missing device\n"
+            "      --create-device only create the device if missing, then exit (needs root)\n",
             argv0);
 }
 
@@ -241,6 +399,9 @@ int main(int argc, char *argv[])
     int requestedFormat = FORMAT_AUTO;
     unsigned int fps    = 30;
     int swapRB          = 0;
+    const char *label   = "SHMVB Camera";
+    int allowCreate     = 1;
+    int createOnly      = 0;
 
     static const struct option longOptions[] =
     {
@@ -250,11 +411,14 @@ int main(int argc, char *argv[])
         { "format",  required_argument, 0, 'f' },
         { "fps",     required_argument, 0, 'r' },
         { "swap-rb", no_argument,       0, 'b' },
+        { "label",   required_argument, 0, 'l' },
+        { "no-create", no_argument,     0, 'n' },
+        { "create-device", no_argument, 0, 'C' },
         { "help",    no_argument,       0, 'h' },
         { 0, 0, 0, 0 }
     };
     int opt;
-    while ((opt = getopt_long(argc, argv, "c:s:d:f:r:bh", longOptions, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "c:s:d:f:r:bl:nh", longOptions, NULL)) != -1)
     {
         switch (opt)
         {
@@ -262,6 +426,9 @@ int main(int argc, char *argv[])
         case 's': streamName  = optarg; break;
         case 'd': sink.path   = optarg; break;
         case 'b': swapRB      = 1;      break;
+        case 'l': label       = optarg; break;
+        case 'n': allowCreate = 0;      break;
+        case 'C': createOnly  = 1;      break;
         case 'r':
         {
             char *end;
@@ -293,6 +460,9 @@ int main(int argc, char *argv[])
     sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
+
+    if (createOnly) { return ensureDevice(sink.path, label, 1) ? EXIT_SUCCESS : EXIT_FAILURE; }
+    if (!ensureDevice(sink.path, label, allowCreate)) { return EXIT_FAILURE; }
 
     // Check the device up front so a wrong path fails immediately, not after the first frame
     if (!openSink(&sink)) { return EXIT_FAILURE; }

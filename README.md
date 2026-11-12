@@ -134,7 +134,6 @@ Bridges one stream to a [v4l2loopback](https://github.com/umlaeute/v4l2loopback)
 
 ```bash
 sudo apt install v4l2loopback-dkms v4l2loopback-utils   # kernel module + v4l2loopback-ctl
-scripts/v4l2_setup.sh            # creates /dev/video43 "SHMVB Camera" (needs sudo)
 ./publisher &                    # or any other publisher
 ./v4l2sink -s stream1 -d /dev/video43
 ffplay /dev/video43              # or pick "SHMVB Camera" in a browser / OBS
@@ -148,6 +147,11 @@ ffplay /dev/video43              # or pick "SHMVB Camera" in a browser / OBS
 | `-f, --format FMT` | `auto` | `auto` (`grey` for 1 channel, else `yuyv`), `grey`, `rgb24`, `bgr24`, `yuyv`, `yu12` |
 | `-r, --fps N` | `30` | Advertised frame rate; the last frame is re-sent when the publisher is slower, so consumers don't time out (`0` = never) |
 | `-b, --swap-rb` | off | The stream holds BGR(A), e.g. from OpenCV |
+| `-l, --label NAME` | `SHMVB Camera` | Camera name, if the device has to be created |
+| `-n, --no-create` | off | Fail instead of creating a missing device |
+| `--create-device` | | Only create the device (if missing) and exit |
+
+If the device doesn't exist, `v4l2sink` creates it through v4l2loopback's control node (`/dev/v4l2loopback`, module 0.13+; the same as newer `v4l2loopback-ctl add`). Existing loopback devices and the programs using them are left alone. If the module isn't loaded, it is loaded with just this device. Creating needs root, so `v4l2sink` re-runs only that step through `sudo` (you are asked for your password once) and then keeps running as you. `scripts/v4l2_setup.sh [nr] [label]` creates the device ahead of time the same way.
 
 Streams with 1, 3 (RGB) or 4 (RGBA) channels are supported. It can start before the publisher, follows a stream that is re-created or resized, and stops on `SIGINT`/`SIGTERM`.
 
