@@ -128,6 +128,37 @@ Requires `libX11`. Links against `libSharedMemoryVideoBuffers.so`.
 
 ---
 
+### `v4l2sink` — Stream as a webcam (`/dev/videoN`)
+
+Bridges one stream to a [v4l2loopback](https://github.com/umlaeute/v4l2loopback) device, so any V4L2 application (OBS, Firefox/Chrome, Zoom, `ffplay`, OpenCV `VideoCapture`) sees it as a camera. It runs in user space: v4l2loopback provides the kernel side, `v4l2sink` copies each new frame out of shared memory (under the read lock, released before writing to the device, so publishers are never stalled) and `write()`s it to the device.
+
+```bash
+sudo apt install v4l2loopback-dkms v4l2loopback-utils   # kernel module + v4l2loopback-ctl
+scripts/v4l2_setup.sh            # creates /dev/video43 "SHMVB Camera" (needs sudo)
+./publisher &                    # or any other publisher
+./v4l2sink -s stream1 -d /dev/video43
+ffplay /dev/video43              # or pick "SHMVB Camera" in a browser / OBS
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-c, --context NAME` | `video_frames.shm` | Shared memory context |
+| `-s, --stream NAME` | `stream1` | Stream to bridge (one stream per process) |
+| `-d, --device PATH` | `/dev/video43` | v4l2loopback node |
+| `-f, --format FMT` | `auto` | `auto` (`grey` for 1 channel, else `yuyv`), `grey`, `rgb24`, `bgr24`, `yuyv`, `yu12` |
+| `-r, --fps N` | `30` | Advertised frame rate; the last frame is re-sent when the publisher is slower, so consumers don't time out (`0` = never) |
+| `-b, --swap-rb` | off | The stream holds BGR(A), e.g. from OpenCV |
+
+Streams with 1, 3 (RGB) or 4 (RGBA) channels are supported. It can start before the publisher, follows a stream that is re-created or resized, and stops on `SIGINT`/`SIGTERM`.
+
+Troubleshooting:
+- *doesn't accept output frames*: the node isn't a v4l2loopback device, or it already has a producer.
+- *Device or resource busy* when the size changes: v4l2loopback keeps its format while a consumer has the device open. Close the consumer and the sink retries every second.
+- Browsers list the camera only with `exclusive_caps=1` (the setup script sets it), and most of them need YUYV or YU12, not RGB24.
+- Permission denied: add yourself to the `video` group.
+
+---
+
 ## Python Utilities (`src/python/`)
 
 All Python scripts depend on `libSharedMemoryVideoBuffers.so`. The `SharedMemoryManager` wrapper loads it via `ctypes`.

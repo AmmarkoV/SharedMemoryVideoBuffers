@@ -4,6 +4,7 @@
 /publisher
 /server
 /viewer
+/v4l2sink
 /publisher_data
 *.so
 /obj/

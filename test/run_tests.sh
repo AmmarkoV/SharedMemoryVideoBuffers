@@ -55,6 +55,12 @@ build timestamp_consistency_reader
 build protocol_edge_cases
 build registry_edge_cases
 build framerate_benchmark
+if ! "$CC" -O2 -Wall -I"$SRC_DIR" pixel_convert_test.c "$SRC_DIR/pixel_convert.c" -o "$BIN_DIR/pixel_convert_test" 2> "$LOG_DIR/build_pixel_convert_test.log"
+then
+    echo "BUILD FAILED: pixel_convert_test"
+    cat "$LOG_DIR/build_pixel_convert_test.log"
+    exit 1
+fi
 if ! "$CC" -O2 -Wall -shared -fPIC -I"$SRC_DIR" "$LIB_SRC" -o "$BIN_DIR/libSharedMemoryVideoBuffers.so" -pthread -lrt 2> "$LOG_DIR/build_library.log"
 then
     echo "BUILD FAILED: libSharedMemoryVideoBuffers.so"
@@ -145,6 +151,8 @@ run_single registry_edge_cases shmvb_test_reg_     "$BIN_DIR/registry_edge_cases
 # to also require a minimum framerate)
 run_single framerate_640x480x3   shmvb_test_fps "$BIN_DIR/framerate_benchmark" 640 480 3 "$DURATION"
 run_single framerate_1920x1080x3 shmvb_test_fps "$BIN_DIR/framerate_benchmark" 1920 1080 3 "$DURATION"
+run_single pixel_convert shmvb_test_pixconv "$BIN_DIR/pixel_convert_test"
+
 run_single framerate_1224x1024x4 shmvb_test_fps "$BIN_DIR/framerate_benchmark" 1224 1024 4 "$DURATION"
 
 # Python bindings (src/python/SharedMemoryManager.py) - see test_shared_memory_manager.py

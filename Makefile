@@ -13,6 +13,7 @@ CLIENT_SRC    = src/c/client.c src/c/sharedMemoryVideoBuffers.c
 CONSUMER_SRC  = src/c/consumer.c src/c/sharedMemoryVideoBuffers.c
 PUBLISHER_SRC = src/c/publisher.c src/c/sharedMemoryVideoBuffers.c
 VIEWER_SRC    = src/c/viewer.c src/c/sharedMemoryVideoBuffers.c
+V4L2SINK_SRC  = src/c/v4l2sink.c src/c/pixel_convert.c src/c/sharedMemoryVideoBuffers.c
 LIBRARY_SRC   = src/c/sharedMemoryVideoBuffers.c
 
 SERVER_OBJ    = $(addprefix $(OBJ_DIR)/, $(notdir $(SERVER_SRC:.c=.o)))
@@ -20,10 +21,11 @@ CLIENT_OBJ    = $(addprefix $(OBJ_DIR)/, $(notdir $(CLIENT_SRC:.c=.o)))
 CONSUMER_OBJ  = $(addprefix $(OBJ_DIR)/, $(notdir $(CONSUMER_SRC:.c=.o)))
 PUBLISHER_OBJ = $(addprefix $(OBJ_DIR)/, $(notdir $(PUBLISHER_SRC:.c=.o)))
 VIEWER_OBJ    = $(addprefix $(OBJ_DIR)/, $(notdir $(VIEWER_SRC:.c=.o)))
+V4L2SINK_OBJ  = $(addprefix $(OBJ_DIR)/, $(notdir $(V4L2SINK_SRC:.c=.o)))
 LIBRARY_OBJ   = $(addprefix $(OBJ_DIR)/, $(notdir $(LIBRARY_SRC:.c=.o)))
 
 LIBRARY_NAME = libSharedMemoryVideoBuffers.so
-TARGETS      = server client viewer consumer publisher $(LIBRARY_NAME)
+TARGETS      = server client viewer consumer publisher v4l2sink $(LIBRARY_NAME)
 
 .PHONY: all clean test
 
@@ -46,6 +48,9 @@ publisher: $(PUBLISHER_OBJ)
 
 viewer: $(VIEWER_OBJ)
 	$(CC) -o $@ $(CFLAGS) $^ $(X11LIBS) $(LDLIBS)
+
+v4l2sink: $(V4L2SINK_OBJ)
+	$(CC) -o $@ $(CFLAGS) $^ $(LDLIBS)
 
 $(LIBRARY_NAME): $(LIBRARY_OBJ)
 	$(CC) $(LDFLAGS)  $^ -o $@ $(CFLAGS) $(LDLIBS)

@@ -15,6 +15,7 @@ set(CLIENT_SRC src/c/client.c src/c/sharedMemoryVideoBuffers.c)
 set(CONSUMER_SRC src/c/consumer.c src/c/sharedMemoryVideoBuffers.c)
 set(PUBLISHER_SRC src/c/publisher.c src/c/sharedMemoryVideoBuffers.c)
 set(VIEWER_SRC src/c/viewer.c src/c/sharedMemoryVideoBuffers.c)
+set(V4L2SINK_SRC src/c/v4l2sink.c src/c/pixel_convert.c src/c/sharedMemoryVideoBuffers.c)
 set(LIBRARY_SRC src/c/sharedMemoryVideoBuffers.c)
 
 # Targets
@@ -23,6 +24,7 @@ add_executable(client ${CLIENT_SRC})
 add_executable(consumer ${CONSUMER_SRC})
 add_executable(publisher ${PUBLISHER_SRC})
 add_executable(viewer ${VIEWER_SRC})
+add_executable(v4l2sink ${V4L2SINK_SRC})
 add_library(SharedMemoryVideoBuffers SHARED ${LIBRARY_SRC})
 
 # Include directories
@@ -31,6 +33,7 @@ target_include_directories(client PRIVATE ${CMAKE_SOURCE_DIR}/src/c)
 target_include_directories(consumer PRIVATE ${CMAKE_SOURCE_DIR}/src/c)
 target_include_directories(publisher PRIVATE ${CMAKE_SOURCE_DIR}/src/c)
 target_include_directories(viewer PRIVATE ${CMAKE_SOURCE_DIR}/src/c)
+target_include_directories(v4l2sink PRIVATE ${CMAKE_SOURCE_DIR}/src/c)
 target_include_directories(SharedMemoryVideoBuffers PRIVATE ${CMAKE_SOURCE_DIR}/src/c)
 
 # Link libraries. Passed through target_link_libraries (not CMAKE_C_FLAGS) so they come
@@ -42,6 +45,7 @@ target_link_libraries(client PRIVATE ${SHMVB_LIBS})
 target_link_libraries(consumer PRIVATE ${SHMVB_LIBS})
 target_link_libraries(publisher PRIVATE ${SHMVB_LIBS})
 target_link_libraries(viewer PRIVATE ${X11LIBS} ${SHMVB_LIBS})
+target_link_libraries(v4l2sink PRIVATE ${SHMVB_LIBS})
 target_link_libraries(SharedMemoryVideoBuffers PRIVATE ${SHMVB_LIBS})
 
 # Output directories
