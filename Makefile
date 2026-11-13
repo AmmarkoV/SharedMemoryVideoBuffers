@@ -15,6 +15,7 @@ CONSUMER_SRC  = src/c/consumer.c src/c/sharedMemoryVideoBuffers.c
 PUBLISHER_SRC = src/c/publisher.c src/c/sharedMemoryVideoBuffers.c
 VIEWER_SRC    = src/c/viewer.c src/c/sharedMemoryVideoBuffers.c
 SCREENCAP_SRC = src/c/screencapture.c src/c/sharedMemoryVideoBuffers.c
+FFSOURCE_SRC  = src/c/ffmpegsource.c src/c/sharedMemoryVideoBuffers.c
 V4L2SINK_SRC  = src/c/v4l2sink.c src/c/pixel_convert.c src/c/sharedMemoryVideoBuffers.c
 LIBRARY_SRC   = src/c/sharedMemoryVideoBuffers.c
 
@@ -24,11 +25,12 @@ CONSUMER_OBJ  = $(addprefix $(OBJ_DIR)/, $(notdir $(CONSUMER_SRC:.c=.o)))
 PUBLISHER_OBJ = $(addprefix $(OBJ_DIR)/, $(notdir $(PUBLISHER_SRC:.c=.o)))
 VIEWER_OBJ    = $(addprefix $(OBJ_DIR)/, $(notdir $(VIEWER_SRC:.c=.o)))
 SCREENCAP_OBJ = $(addprefix $(OBJ_DIR)/, $(notdir $(SCREENCAP_SRC:.c=.o)))
+FFSOURCE_OBJ  = $(addprefix $(OBJ_DIR)/, $(notdir $(FFSOURCE_SRC:.c=.o)))
 V4L2SINK_OBJ  = $(addprefix $(OBJ_DIR)/, $(notdir $(V4L2SINK_SRC:.c=.o)))
 LIBRARY_OBJ   = $(addprefix $(OBJ_DIR)/, $(notdir $(LIBRARY_SRC:.c=.o)))
 
 LIBRARY_NAME = libSharedMemoryVideoBuffers.so
-TARGETS      = server client viewer consumer publisher v4l2sink $(LIBRARY_NAME)
+TARGETS      = server client viewer consumer publisher v4l2sink ffmpegsource $(LIBRARY_NAME)
 
 # screencapture is optional: built only when the XShm headers (libxext-dev) are present,
 # so a missing library never breaks the rest of the build
@@ -64,6 +66,9 @@ viewer: $(VIEWER_OBJ)
 screencapture: $(SCREENCAP_OBJ)
 	$(CC) -o $@ $(CFLAGS) $^ $(XSHMLIBS) $(LDLIBS)
 
+ffmpegsource: $(FFSOURCE_OBJ)
+	$(CC) -o $@ $(CFLAGS) $^ $(LDLIBS)
+
 v4l2sink: $(V4L2SINK_OBJ)
 	$(CC) -o $@ $(CFLAGS) $^ $(LDLIBS)
 
@@ -79,7 +84,7 @@ install: $(LIBRARY_NAME)
 	sudo ldconfig
 
 clean:
-	rm -f $(OBJ_DIR)/*.o $(OBJ_DIR)/*.d $(TARGETS) $(LIBRARY_NAME) screencapture
+	rm -f $(OBJ_DIR)/*.o $(OBJ_DIR)/*.d $(TARGETS) $(LIBRARY_NAME) screencapture ffmpegsource
 	rm -rf test/bin
 
 # Header dependencies written by -MMD, so changing a header rebuilds every object that includes it

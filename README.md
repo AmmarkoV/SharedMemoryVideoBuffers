@@ -163,6 +163,32 @@ Troubleshooting:
 
 ---
 
+### `ffmpegsource` — Video file / URL / device as a webcam
+
+Runs the `ffmpeg` command line tool as a child process, decoding anything it can open (files, RTSP/HTTP streams, capture devices) to raw RGB on a pipe, and publishes the frames as a stream (`"ffmpeg"` by default). It needs no libav* development files, only `ffmpeg`/`ffprobe` at run time, so it always builds. Paired with `v4l2sink`:
+
+```bash
+scripts/ffmpeg_to_webcam.sh video.mp4 44 -L -W 1280   # input, device nr, extra ffmpegsource options
+# equivalent to:
+./ffmpegsource -i video.mp4 -L -W 1280 &
+./v4l2sink -s ffmpeg -d /dev/video44 -l "SHMVB Video"
+ffplay /dev/video44
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-i, --input URL` | (required) | File, URL or device, anything ffmpeg accepts |
+| `-c, --context NAME` | `video_frames.shm` | Shared memory context (created if missing) |
+| `-s, --stream NAME` | `ffmpeg` | Stream to publish |
+| `-W, --width N` / `-H, --height N` | input's size (ffprobe) | Output size; one alone keeps the aspect ratio. Rounded to even |
+| `-r, --fps N` | input's rate | Output frame rate |
+| `-L, --loop` | off | Loop a file forever |
+| `-R` / `-N` | realtime for files | Read at native speed / as fast as possible |
+
+Arguments after `--` go to ffmpeg before `-i`, e.g. `./ffmpegsource -i /dev/video0 -- -f v4l2 -input_format mjpeg`. It stops at the end of the input, or on `SIGINT`/`SIGTERM`.
+
+---
+
 ### `screencapture` — Screen as a webcam
 
 Captures the X11 screen (or a region) with MIT-SHM (`XShmGetImage`, falling back to `XGetImage`) and publishes it as an RGB stream (`"screen"` by default). Paired with `v4l2sink`, the desktop becomes a webcam any V4L2 application can open:

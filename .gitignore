@@ -6,6 +6,7 @@
 /viewer
 /v4l2sink
 /screencapture
+/ffmpegsource
 /publisher_data
 *.so
 /obj/
