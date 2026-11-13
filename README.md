@@ -163,6 +163,30 @@ Troubleshooting:
 
 ---
 
+### `screencapture` — Screen as a webcam
+
+Captures the X11 screen (or a region) with MIT-SHM (`XShmGetImage`, falling back to `XGetImage`) and publishes it as an RGB stream (`"screen"` by default). Paired with `v4l2sink`, the desktop becomes a webcam any V4L2 application can open:
+
+```bash
+scripts/screen_to_webcam.sh 43 30 1280x720+0+0   # nr, fps, optional region; Ctrl+C stops both
+# equivalent to:
+./screencapture -s screen -r 30 -g 1280x720+0+0 &
+./v4l2sink -s screen -d /dev/video43 -l "SHMVB Screen"
+ffplay /dev/video43
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-c, --context NAME` | `video_frames.shm` | Shared memory context (created if missing) |
+| `-s, --stream NAME` | `screen` | Stream to publish |
+| `-g, --geometry WxH+X+Y` | whole screen | Region to capture (clipped to the screen, rounded to even sizes) |
+| `-r, --fps N` | `30` | Capture rate |
+| `-D, --display NAME` | `$DISPLAY` | X display |
+
+Requires `libX11` and `libXext`. On Wayland only XWayland windows are visible to it.
+
+---
+
 ## Python Utilities (`src/python/`)
 
 All Python scripts depend on `libSharedMemoryVideoBuffers.so`. The `SharedMemoryManager` wrapper loads it via `ctypes`.

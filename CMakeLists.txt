@@ -16,6 +16,7 @@ set(CONSUMER_SRC src/c/consumer.c src/c/sharedMemoryVideoBuffers.c)
 set(PUBLISHER_SRC src/c/publisher.c src/c/sharedMemoryVideoBuffers.c)
 set(VIEWER_SRC src/c/viewer.c src/c/sharedMemoryVideoBuffers.c)
 set(V4L2SINK_SRC src/c/v4l2sink.c src/c/pixel_convert.c src/c/sharedMemoryVideoBuffers.c)
+set(SCREENCAP_SRC src/c/screencapture.c src/c/sharedMemoryVideoBuffers.c)
 set(LIBRARY_SRC src/c/sharedMemoryVideoBuffers.c)
 
 # Targets
@@ -57,3 +58,16 @@ set_target_properties(viewer PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_
 set_target_properties(SharedMemoryVideoBuffers PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
  
 
+
+# Optional: screencapture needs libX11 + libXext (MIT-SHM). Skipped, not fatal, if missing
+find_path(XSHM_INCLUDE_DIR X11/extensions/XShm.h)
+find_library(X11_LIB X11)
+find_library(XEXT_LIB Xext)
+if(XSHM_INCLUDE_DIR AND X11_LIB AND XEXT_LIB)
+    add_executable(screencapture ${SCREENCAP_SRC})
+    target_include_directories(screencapture PRIVATE ${CMAKE_SOURCE_DIR}/src/c ${XSHM_INCLUDE_DIR})
+    target_link_libraries(screencapture PRIVATE ${X11_LIB} ${XEXT_LIB} ${SHMVB_LIBS})
+    set_target_properties(screencapture PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+else()
+    message(STATUS "screencapture skipped: libX11/libXext development files not found")
+endif()

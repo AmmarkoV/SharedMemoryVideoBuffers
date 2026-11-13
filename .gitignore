@@ -5,6 +5,7 @@
 /server
 /viewer
 /v4l2sink
+/screencapture
 /publisher_data
 *.so
 /obj/
